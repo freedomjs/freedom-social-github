@@ -7,6 +7,11 @@ var GithubSocialProvider = function(dispatchEvent) {
   this.networkName_ = 'github';
   // TODO: rename uproxyGistDescription.
   this.uproxyGistDescription_ = 'test';
+
+  this.gists = [];
+  this.userProfiles = {};
+  this.userToUproxyGistUrl_ = {}; // map client to uproxy gist url.
+
   this.initLogger_('GithubSocialProvider');
   this.initState_();
   this.storage = freedom['core.storage']();
@@ -42,7 +47,7 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
         };
 
         // If the user does not yet have a public uProxy gist, create one.
-        this.checkForUproxyGist_(clientState.userId)
+        this.checkForUproxyGist_('myUserId')
             .then(function(uproxyGistExists) {
           if (!uproxyGistExists) {
             this.createUproxyGist_();
@@ -51,6 +56,8 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
           fulfillLogin(clientState);
         });
 
+        this.loadContacts_();
+        // TODO: this.updateUproxySecretGists_();
       } else {
         rejectLogin("Login Failed! " + error);
         return;
@@ -70,16 +77,17 @@ GithubSocialProvider.prototype.checkForUproxyGist_ = function(userId) {
   return new Promise(function(fulfill, reject) {
     // TODO: error checking
     xhr.onload = function() {
-      var publicGists = JSON.parse(this.response);
-      for (var i = 0; i < publicGists.length; i++) {
-        if (publicGists[i].description === this.uproxyGistDescription_) {
+      var gists = JSON.parse(xhr.response);
+      for (var i = 0; i < gists.length; i++) {
+        if (gists[i].description === this.uproxyGistDescription_) {
+          this.userToUproxyGistUrl_[userId] = gists[i].url;
           return fulfill(true);
         }
       }
       return fulfill(false);
-    };
+    }.bind(this);
     xhr.send();
-  });
+  }.bind(this));
 };
 
 /*
@@ -104,7 +112,35 @@ GithubSocialProvider.prototype.createUproxyGist_ = function() {
         }
       }
     });
-  });
+  }.bind(this));
+};
+
+/*
+ * Loads contacts of the logged in user, and calls this.addUserProfile_
+ * and this.updateUserProfile_ (if needed later, e.g. for async image
+ * fetching) for each contact.
+ */
+GithubSocialProvider.prototype.loadContacts_ = function() {
+  var xhr = new XMLHttpRequest();
+  var url = 'https://api.github.com/users/' + 'myUserId' + '/followers';
+  xhr.open('GET', url);
+  return new Promise(function(fulfill, reject) {
+    // TODO: error checking
+    xhr.onload = function() {
+      var followers = JSON.parse(xhr.response);
+      for (var i = 0; i < followers.length; ++i) {
+        var follower = followers[i];
+        console.log(follower);
+        this.checkForUproxyGist_(follower.login)
+            .then(function(uproxyGistExists) {
+          if (uproxyGistExists) {
+            this.addUserProfile_(follower.login);
+          }
+        }.bind(this));
+      }
+    }.bind(this);
+    xhr.send();
+  }.bind(this));
 };
 
 /*
@@ -144,15 +180,36 @@ GithubSocialProvider.prototype.initState_ = function() {
 /*
  * Adds a UserProfile.
  */
-GithubSocialProvider.prototype.addUserProfile_ = function(friend) {
-  var userProfile = {
-    userId: friend.userId,
-    name: friend.name || '',
-    lastUpdated: Date.now(),
-    url: friend.url || '',
-    imageData: friend.imageData || ''
-  };
-  this.dispatchEvent_('onUserProfile', userProfile);
+GithubSocialProvider.prototype.addUserProfile_ = function(friendId) {
+  var xhr = new XMLHttpRequest();
+  var url = 'https://api.github.com/users/' + friendId;
+  xhr.open('GET', url);
+  return new Promise(function(fulfill, reject) {
+    // TODO: error checking
+    xhr.onload = function() {
+      var friend = JSON.parse(xhr.response);
+      var userProfile = {
+        userId: friend.login,
+        name: friend.name || friend.login || '',
+        lastUpdated: Date.now(),
+        url: friend.html_url || '',
+        imageData: friend.avatar_url || ''
+      };
+      this.dispatchEvent_('onUserProfile', userProfile);
+
+      var clientState = {
+        userId: friend.login,
+        clientId: friend.login,
+        lastUpdated: Date.now(),
+        lastSeen: Date.now(),
+        status: "ONLINE"
+      };
+      this.dispatchEvent_('onClientState', clientState);
+
+      return fulfill(userProfile);
+    }.bind(this);
+    xhr.send();
+  }.bind(this));
 };
 
 /*
