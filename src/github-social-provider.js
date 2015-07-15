@@ -5,6 +5,8 @@
 var GithubSocialProvider = function(dispatchEvent) {
   this.dispatchEvent_ = dispatchEvent;
   this.networkName_ = 'github';
+  // TODO: rename uproxyGistDescription.
+  this.uproxyGistDescription_ = 'test';
   this.initLogger_('GithubSocialProvider');
   this.initState_();
   this.storage = freedom['core.storage']();
@@ -29,7 +31,6 @@ GithubSocialProvider.prototype.initLogger_ = function(moduleName) {
  */
 GithubSocialProvider.prototype.login = function(loginOpts) {
   return new Promise(function(fulfillLogin, rejectLogin) {
-    // TODO: get a real token and get real client state.
     var OAUTH_REDIRECT_URLS = [
       "https://www.uproxy.org/oauth-redirect-uri",
       "http://freedomjs.org/",
@@ -82,11 +83,55 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
       }.bind(this));
       xhr.send();
     }.bind(this));
-
-    /*
-        rejectLogin("Login Failed! " + error);
-    */
   }.bind(this));  // end of return new Promise
+};
+
+/*
+ * Check if this user already has a public uProxy gist with their public
+ * key in it.
+ */
+GithubSocialProvider.prototype.checkForUproxyGist_ = function(userId) {
+  var xhr = new XMLHttpRequest();
+  var url = 'https://api.github.com/users/' + userId + '/gists';
+  xhr.open('GET', url);
+  return new Promise(function(fulfill, reject) {
+    // TODO: error checking
+    xhr.onload = function() {
+      var publicGists = JSON.parse(this.response);
+      for (var i = 0; i < publicGists.length; i++) {
+        if (publicGists[i].description === this.uproxyGistDescription_) {
+          return fulfill(true);
+        }
+      }
+      return fulfill(false);
+    };
+    xhr.send();
+  });
+};
+
+/*
+ * Create a public uProxy gist for this user with their public key in it.
+ */
+GithubSocialProvider.prototype.createUproxyGist_ = function() {
+  console.log('trying to post new gist');
+  var xhr = new XMLHttpRequest();
+  var url = 'https://api.github.com/gists';
+  xhr.open('POST', url);
+  return new Promise(function(fulfill, reject) {
+    // TODO: error checking
+    xhr.onload = function() {
+      fulfill(true);
+    };
+    xhr.send({
+      "description": this.uproxyGistDescription_,
+      "public": true,
+      "files": {
+        "file1.txt": {
+          "content": "my key"
+        }
+      }
+    });
+  });
 };
 
 /*
