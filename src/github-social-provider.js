@@ -11,10 +11,12 @@ var GithubSocialProvider = function(dispatchEvent) {
   this.gists = [];
   this.userProfiles = {};
   this.userToUproxyGistUrl_ = {}; // map client to uproxy gist url.
+  this.myClientState_ = {};
 
   this.initLogger_('GithubSocialProvider');
   this.initState_();
   this.storage = freedom['core.storage']();
+  this.access_token = '';
 };
 
 /*
@@ -35,34 +37,71 @@ GithubSocialProvider.prototype.initLogger_ = function(moduleName) {
  */
 GithubSocialProvider.prototype.login = function(loginOpts) {
   return new Promise(function(fulfillLogin, rejectLogin) {
-    // TODO: get a real token and get real client state.
-    this.getOAuthToken_(loginOpts).then(function(token) {
-      if (token) {
-        var clientState = {
-          userId: 'myUserId',
-          clientId: 'myClientId',
-          status: "ONLINE",
-          lastUpdated: Date.now(),
-          lastSeen: Date.now()
-        };
+    var OAUTH_REDIRECT_URLS = [
+      "https://www.uproxy.org/oauth-redirect-uri",
+      "http://freedomjs.org/",
+      "http://localhost:8080/",
+      "https://fmdppkkepalnkeommjadgbhiohihdhii.chromiumapp.org/"
+    ];
+    var OAUTH_CLIENT_ID = '98d31e7ceefe0518a093';
+    var oauth = freedom["core.oauth"]();
 
-        // If the user does not yet have a public uProxy gist, create one.
-        this.checkForUproxyGist_('myUserId')
-            .then(function(uproxyGistExists) {
-          if (!uproxyGistExists) {
-            this.createUproxyGist_();
-          }
-        }.bind(this)).then(function() {
-          fulfillLogin(clientState);
-        });
+    oauth.initiateOAuth(OAUTH_REDIRECT_URLS).then(function(stateObj) {
+      var url ='https://github.com/login/oauth/authorize?client_id=98d31e7ceefe0518a093';
+      return oauth.launchAuthFlow(url, stateObj).then(function(responseUrl) {
+        return responseUrl.match(/code=([^&]+)/)[1];
+      });
+    }).then(function(code) {
+      var xhr = freedom["core.xhr"]();
+      xhr.open('POST', 'https://github.com/login/oauth/access_token?code=' + code +
+                '&client_id=98d31e7ceefe0518a093' +
+                '&client_secret=f77bf1477d4ade44d2dff674e2ff742ed540b3a1', true);
+      xhr.on('onload', function() {
+        console.log('xhr loaded');
+        xhr.getResponseText().then(function(text) {
+          this.access_token = text.match(/access_token=([^&]+)/)[1];
+          xhr = new freedom["core.xhr"]();
+          xhr.open('GET', 'https://api.github.com/user?access_token=' + this.access_token, true);
+          xhr.on('onload', function() {
+            xhr.getResponseText().then(function(text) {
+              var user = JSON.parse(text);
+              console.log(user);
+              var clientState = {
+                userId: user.login,
+                clientId: 'myClientId',
+                status: "ONLINE",
+                lastUpdated: Date.now(),
+                lastSeen: Date.now()
+              };
 
-        this.loadContacts_();
-        // TODO: this.updateUproxySecretGists_();
-      } else {
-        rejectLogin("Login Failed! " + error);
-        return;
-      }
-    }.bind(this));  // end of getOAuthToken_
+              this.myClientState_ = clientState;
+              // If the user does not yet have a public uProxy gist, create one.
+              this.checkForUproxyGist_(this.myClientState_.userId)
+                  .then(function(uproxyGistExists) {
+                if (!uproxyGistExists) {
+                  this.createUproxyGist_();
+                }
+              }.bind(this)).then(function() {
+                fulfillLogin(clientState);
+              });
+
+              this.loadContacts_();
+
+              var profile = {
+                userId: user.login,
+                name: user.name,
+                lastUpdated: Date.now(),
+                url: user.url,
+                imageData: user.avatar_url
+              };
+              this.addUserProfile_(profile);
+            }.bind(this));
+          }.bind(this));
+          xhr.send();
+        }.bind(this));
+      }.bind(this));
+      xhr.send();
+    }.bind(this));
   }.bind(this));  // end of return new Promise
 };
 
@@ -73,11 +112,13 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
 GithubSocialProvider.prototype.checkForUproxyGist_ = function(userId) {
   var xhr = new XMLHttpRequest();
   var url = 'https://api.github.com/users/' + userId + '/gists';
+  console.log('getting gists');
   xhr.open('GET', url);
   return new Promise(function(fulfill, reject) {
     // TODO: error checking
     xhr.onload = function() {
       var gists = JSON.parse(xhr.response);
+      console.log(gists);
       for (var i = 0; i < gists.length; i++) {
         if (gists[i].description === this.uproxyGistDescription_) {
           this.userToUproxyGistUrl_[userId] = gists[i].url;
@@ -122,7 +163,7 @@ GithubSocialProvider.prototype.createUproxyGist_ = function() {
  */
 GithubSocialProvider.prototype.loadContacts_ = function() {
   var xhr = new XMLHttpRequest();
-  var url = 'https://api.github.com/users/' + 'myUserId' + '/followers';
+  var url = 'https://api.github.com/users/' + this.myClientState_.userId + '/followers';
   xhr.open('GET', url);
   return new Promise(function(fulfill, reject) {
     // TODO: error checking
