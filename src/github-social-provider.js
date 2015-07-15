@@ -1,6 +1,8 @@
 /*
  * GitHub social provider
  */
+var PUBLIC_GIST_DESCRIPTION = 'freedom_public';
+var HEARTBEAT_GIST_DESCRIPTION = 'freedom_hearbeat';
 
 var GithubSocialProvider = function(dispatchEvent) {
   this.dispatchEvent_ = dispatchEvent;
@@ -14,9 +16,9 @@ var GithubSocialProvider = function(dispatchEvent) {
   this.myClientState_ = {};
 
   this.initLogger_('GithubSocialProvider');
-  this.initState_();
   this.storage = freedom['core.storage']();
   this.access_token = '';
+  this.users_ = {};
 };
 
 /*
@@ -134,7 +136,7 @@ GithubSocialProvider.prototype.checkForUproxyGist_ = function(userId) {
 /*
  * Create a public uProxy gist for this user with their public key in it.
  */
-GithubSocialProvider.prototype.createUproxyGist_ = function() {
+GithubSocialProvider.prototype.createGist_ = function(description, isPublic) {
   console.log('trying to post new gist');
   var xhr = new XMLHttpRequest();
   var url = 'https://api.github.com/gists';
@@ -145,8 +147,8 @@ GithubSocialProvider.prototype.createUproxyGist_ = function() {
       fulfill(true);
     };
     xhr.send({
-      "description": this.uproxyGistDescription_,
-      "public": true,
+      "description": description,
+      "public": isPublic,
       "files": {
         "file1.txt": {
           "content": "my key"
@@ -184,6 +186,65 @@ GithubSocialProvider.prototype.loadContacts_ = function() {
   }.bind(this));
 };
 
+GithubSocialProvider.prototype.postComment_ = function(gist, comment) {
+};
+
+GithubSocialProvider.prototype.pullGist_ = function(gist) {
+};
+
+GithubSocialProvider.prototype.getUserProfile_ = function(userId) {
+  var xhr = freedom["core.xhr"]();
+  xhr.open('GET', 'https://api.github.com/users/:' + userId + '?access_token=' + this.access_token, true);
+  xhr.on('onload', function() {
+    xhr.getResponseText().then(function(text) {
+      var user = JSON.parse(text);
+      console.log(user);
+      var profile = {
+        userId: user.login,
+        name: user.name,
+        lastUpdated: Date.now(),
+        url: user.url,
+        imageData: user.avatar_url
+      };
+      this.addUserProfile_(profile);
+    });
+  });
+};
+
+GithubSocialProvider.prototype.restoreFromStorage_ = function() {
+  //TODO read from storage
+  // construct this.users_
+
+  // TODO check if it's not there and then:
+  this.createGist_(PUBLIC_GIST_DESCRIPTION, true);
+  this.createGist_(HEARTBEAT_GIST_DESCRIPTION, false);
+  setInterval(this.heartbeat_.bind(this), 10000); // 10 secs for now
+};
+
+GithubSocialProvider.prototype.hearbeat_ = function() {
+  // TODO post a heartbeat to my private hearbeat gist
+  // TODO pull my public gist and see if I have new users and raise onInvite event
+  for (var user in this.users_) {
+    if (typeof this.users_[user].hearbeat !== undefined) {
+      // TODO pull that gist and update client
+    }
+    if (typeof this.users_[user].signaling != undefined) {
+      // TODO pull that gist and raise onMessage event
+    }
+  }
+};
+
+GithubSocialProvider.prototype.inviteFriend = function() {
+  // TODO create private gist
+  // TODO post it to users public gist
+  // TODO get user profile
+};
+
+GithubSocialProvider.prototype.acceptInvite = function() {
+  // TODO post your private hearbeat gist url to your friend's public gist or private gist
+  // TODO update user profile
+};
+
 /*
  * Returns a Promise which fulfills with all known ClientStates.
  */
@@ -212,11 +273,6 @@ GithubSocialProvider.prototype.logout = function() {
   return Promise.resolve();
 };
 
-/*
- * Initialize state.
- */
-GithubSocialProvider.prototype.initState_ = function() {
-};
 
 /*
  * Adds a UserProfile.
@@ -278,13 +334,6 @@ GithubSocialProvider.prototype.handleMessage_ =
       'onMessage', {from: clientState, message: message});
 };
 
-
-/*
- * Returns a Promise which fulfills with an OAuth token.
- */
-GithubSocialProvider.prototype.getOAuthToken_ = function() {
-  return Promise.resolve('token');
-};
 
 // Register provider when in a module context.
 if (typeof freedom !== 'undefined') {
