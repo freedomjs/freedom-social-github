@@ -55,7 +55,7 @@
       "inviteUser": {
         "type": "method",
         "value": [{
-          "userId": "string",
+          "userId": "string"
         }],
         "ret": "Object"
       },
@@ -63,21 +63,21 @@
       "acceptUserInvitation": {
        "type": "method",
         "value": [{
-          "userId": "string",
+          "userId": "string"
         }]
       },
 
       "blockUser": {
        "type": "method",
         "value": [{
-          "userId": "string",
+          "userId": "string"
         }]
       },
 
       "removeUser": {
        "type": "method",
         "value": [{
-          "userId": "string",
+          "userId": "string"
         }]
       },
 
