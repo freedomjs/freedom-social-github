@@ -49,7 +49,7 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
     var oauth = freedom["core.oauth"]();
 
     oauth.initiateOAuth(OAUTH_REDIRECT_URLS).then(function(stateObj) {
-      var url ='https://github.com/login/oauth/authorize?client_id=98d31e7ceefe0518a093';
+      var url ='https://github.com/login/oauth/authorize?client_id=98d31e7ceefe0518a093&scope=gist';
       return oauth.launchAuthFlow(url, stateObj).then(function(responseUrl) {
         return responseUrl.match(/code=([^&]+)/)[1];
       });
@@ -186,7 +186,22 @@ GithubSocialProvider.prototype.loadContacts_ = function() {
   }.bind(this));
 };
 
+/*
+ * Post on given gist with given comment.
+ * @param gist    url with form https://api.github.com/gists/:id/comments
+ * @param comment comment to post
+ */
 GithubSocialProvider.prototype.postComment_ = function(gist, comment) {
+  var xhr = freedom["core.xhr"]();
+  xhr.open('POST', gist, true);
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
+  xhr.on('onload', function() {
+    xhr.getStatus().then(function(status) {
+      console.log(status);
+    });
+  });
+  xhr.send({string: '{"body":"' + comment + '"}'});
 };
 
 GithubSocialProvider.prototype.pullGist_ = function(gist) {
