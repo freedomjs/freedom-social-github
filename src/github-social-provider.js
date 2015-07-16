@@ -9,6 +9,12 @@ var GithubSocialProvider = function(dispatchEvent) {
   this.networkName_ = 'github';
   // TODO: rename uproxyGistDescription.
   this.uproxyGistDescription_ = 'test';
+
+  this.gists = [];
+  this.userProfiles = {};
+  this.userToPublicGistUrl_ = {}; // map client to uproxy gist url.
+  this.myClientState_ = {};
+
   this.initLogger_('GithubSocialProvider');
   this.storage = freedom['core.storage']();
   this.access_token = '';
@@ -43,7 +49,7 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
     var oauth = freedom["core.oauth"]();
 
     oauth.initiateOAuth(OAUTH_REDIRECT_URLS).then(function(stateObj) {
-      var url ='https://github.com/login/oauth/authorize?client_id=98d31e7ceefe0518a093';
+      var url ='https://github.com/login/oauth/authorize?client_id=98d31e7ceefe0518a093&scope=gist';
       return oauth.launchAuthFlow(url, stateObj).then(function(responseUrl) {
         return responseUrl.match(/code=([^&]+)/)[1];
       });
@@ -69,7 +75,20 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
                 lastUpdated: Date.now(),
                 lastSeen: Date.now()
               };
-              fulfillLogin(clientState);
+
+              this.myClientState_ = clientState;
+              // If the user does not yet have a public uProxy gist, create one.
+              this.checkForUproxyGist_(this.myClientState_.userId)
+                  .then(function(uproxyGistExists) {
+                if (!uproxyGistExists) {
+                  this.createUproxyGist_();
+                }
+              }.bind(this)).then(function() {
+                fulfillLogin(clientState);
+              });
+
+              this.loadContacts_();
+
               var profile = {
                 userId: user.login,
                 name: user.name,
@@ -96,20 +115,23 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
 GithubSocialProvider.prototype.checkForUproxyGist_ = function(userId) {
   var xhr = new XMLHttpRequest();
   var url = 'https://api.github.com/users/' + userId + '/gists';
+  console.log('getting gists');
   xhr.open('GET', url);
   return new Promise(function(fulfill, reject) {
     // TODO: error checking
     xhr.onload = function() {
-      var publicGists = JSON.parse(this.response);
-      for (var i = 0; i < publicGists.length; i++) {
-        if (publicGists[i].description === PUBLIC_GIST_DESCRIPTION) {
-          return fulfill(publicGists[i].url);
+      var gists = JSON.parse(xhr.response);
+      console.log(gists);
+      for (var i = 0; i < gists.length; i++) {
+        if (gists[i].description ===  PUBLIC_GIST_DESCRIPTION) {
+          this.userToPublicGistUrl_[userId] = gists[i].url;
+          return fulfill(true);
         }
       }
-      return reject('User does not have public freedom gist');
-    };
+      return fulfill(false);
+    }.bind(this);
     xhr.send();
-  });
+  }.bind(this));
 };
 
 /*
@@ -134,13 +156,84 @@ GithubSocialProvider.prototype.createGist_ = function(description, isPublic) {
         }
       }
     });
-  });
+  }.bind(this));
 };
 
+/*
+ * Loads contacts of the logged in user, and calls this.addUserProfile_
+ * and this.updateUserProfile_ (if needed later, e.g. for async image
+ * fetching) for each contact.
+ */
+GithubSocialProvider.prototype.loadContacts_ = function() {
+  var xhr = new XMLHttpRequest();
+  var url = 'https://api.github.com/users/' + this.myClientState_.userId + '/followers';
+  xhr.open('GET', url);
+  return new Promise(function(fulfill, reject) {
+    // TODO: error checking
+    xhr.onload = function() {
+      var followers = JSON.parse(xhr.response);
+      for (var i = 0; i < followers.length; ++i) {
+        var follower = followers[i];
+        console.log(follower);
+        this.checkForUproxyGist_(follower.login)
+            .then(function(uproxyGistExists) {
+          if (uproxyGistExists) {
+            this.addUserProfile_(follower.login);
+          }
+        }.bind(this));
+      }
+    }.bind(this);
+    xhr.send();
+  }.bind(this));
+};
+
+/*
+ * Post on given gist with given comment.
+ * @param gist    url with form https://api.github.com/gists/:id/comments
+ * @param comment comment to post
+ */
 GithubSocialProvider.prototype.postComment_ = function(gist, comment) {
+  return new Promise(function(fulfill, reject) {
+    var xhr = freedom["core.xhr"]();
+    xhr.open('POST', gist, true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
+    xhr.on('onload', function() {
+      xhr.getStatus().then(function(status) {
+        if (status === 201) {
+          fulfill();
+        } else {
+          reject();
+        }
+      }.bind(this));
+    }.bind(this));
+    xhr.send({string: JSON.stringify({
+      "body" : comment
+    })});
+  }.bind(this));
 };
 
+/*
+ * Get given gist.
+ * @param gist    url with form https://api.github.com/gists/:id
+ */
 GithubSocialProvider.prototype.pullGist_ = function(gist) {
+  return new Promise(function(fulfill, reject) {
+    var xhr = freedom["core.xhr"]();
+    xhr.open('GET', gist + '/comments', true);
+    xhr.on('onload', function() {
+      xhr.getStatus().then(function(status) {
+        if (status === 201) {
+          xhr.getResponseText().then(function(responseText) {
+            fulfill(responseText);
+          }.bind(this));
+        } else {
+          reject();
+        }
+      }.bind(this));
+    }.bind(this));
+    xhr.send();
+  }.bind(this));
 };
 
 GithubSocialProvider.prototype.getUserProfile_ = function(userId) {
@@ -228,8 +321,8 @@ GithubSocialProvider.prototype.getUsers = function() {
 /*
  * Sends a message to another clientId.
  */
-GithubSocialProvider.prototype.sendMessage = function(friend, message) {
-  return Promise.resolve();
+GithubSocialProvider.prototype.sendMessage = function(toClientId, message) {
+  return this.postComment_(this.userToPublicGistUrl_[toClientId] + '/comments', message);
 };
 
 /*
@@ -243,15 +336,36 @@ GithubSocialProvider.prototype.logout = function() {
 /*
  * Adds a UserProfile.
  */
-GithubSocialProvider.prototype.addUserProfile_ = function(friend) {
-  var userProfile = {
-    userId: friend.userId,
-    name: friend.name || '',
-    lastUpdated: Date.now(),
-    url: friend.url || '',
-    imageData: friend.imageData || ''
-  };
-  this.dispatchEvent_('onUserProfile', userProfile);
+GithubSocialProvider.prototype.addUserProfile_ = function(friendId) {
+  var xhr = new XMLHttpRequest();
+  var url = 'https://api.github.com/users/' + friendId;
+  xhr.open('GET', url);
+  return new Promise(function(fulfill, reject) {
+    // TODO: error checking
+    xhr.onload = function() {
+      var friend = JSON.parse(xhr.response);
+      var userProfile = {
+        userId: friend.login,
+        name: friend.name || friend.login || '',
+        lastUpdated: Date.now(),
+        url: friend.html_url || '',
+        imageData: friend.avatar_url || ''
+      };
+      this.dispatchEvent_('onUserProfile', userProfile);
+
+      var clientState = {
+        userId: friend.login,
+        clientId: friend.login,
+        lastUpdated: Date.now(),
+        lastSeen: Date.now(),
+        status: "ONLINE"
+      };
+      this.dispatchEvent_('onClientState', clientState);
+
+      return fulfill(userProfile);
+    }.bind(this);
+    xhr.send();
+  }.bind(this));
 };
 
 /*
