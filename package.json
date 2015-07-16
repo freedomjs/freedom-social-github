@@ -1,7 +1,7 @@
 {
   "name": "freedom-social-github",
   "description": "GitHub Social Provider for freedomjs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/freedomjs/freedom-social-github.git"
@@ -9,6 +9,12 @@
   "bugs": {
     "url": "https://github.com/freedomjs/freedom-social-github/issues"
   },
+  "licenses": [
+    {
+      "type": "Apache-2.0",
+      "url": "http://www.apache.org/licenses/LICENSE-2.0.html"
+    }
+  ],
   "homepage": "https://github.com/freedomjs/freedom-social-github",
   "devDependencies": {
     "freedom": "^0.6.21",
