@@ -78,16 +78,9 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
 
               this.myClientState_ = clientState;
               // If the user does not yet have a public uProxy gist, create one.
-              this.checkForUproxyGist_(this.myClientState_.userId)
-                  .then(function(uproxyGistExists) {
-                if (!uproxyGistExists) {
-                  this.createUproxyGist_();
-                }
-              }.bind(this)).then(function() {
-                fulfillLogin(clientState);
-              });
 
-              this.loadContacts_();
+              fulfillLogin(clientState);
+              //this.loadContacts_();
 
               var profile = {
                 userId: user.login,
@@ -97,7 +90,7 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
                 imageData: user.avatar_url
               };
               this.addUserProfile_(profile);
-              this.restoreFromStorage();
+              this.finishLogin_();
             }.bind(this));
           }.bind(this));
           xhr.send();
@@ -112,7 +105,7 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
  * Check if this user already has a public uProxy gist with their public
  * key in it.
  */
-GithubSocialProvider.prototype.checkForUproxyGist_ = function(userId) {
+GithubSocialProvider.prototype.checkForGist_ = function(userId, description) {
   var xhr = new XMLHttpRequest();
   var url = 'https://api.github.com/users/' + userId + '/gists';
   console.log('getting gists');
@@ -123,7 +116,7 @@ GithubSocialProvider.prototype.checkForUproxyGist_ = function(userId) {
       var gists = JSON.parse(xhr.response);
       console.log(gists);
       for (var i = 0; i < gists.length; i++) {
-        if (gists[i].description ===  PUBLIC_GIST_DESCRIPTION) {
+        if (gists[i].description ===  description) {
           this.userToPublicGistUrl_[userId] = gists[i].url;
           return fulfill(true);
         }
@@ -134,28 +127,30 @@ GithubSocialProvider.prototype.checkForUproxyGist_ = function(userId) {
   }.bind(this));
 };
 
-/*
- * Create a public uProxy gist for this user with their public key in it.
- */
 GithubSocialProvider.prototype.createGist_ = function(description, isPublic) {
-  console.log('trying to post new gist');
-  var xhr = new XMLHttpRequest();
-  var url = 'https://api.github.com/gists';
-  xhr.open('POST', url);
-  return new Promise(function(fulfill, reject) {
-    // TODO: error checking
-    xhr.onload = function() {
-      fulfill(true);
-    };
-    xhr.send({
-      "description": description,
-      "public": isPublic,
-      "files": {
-        "file1.txt": {
-          "content": "my key"
-        }
+  this.checkForGist_(this.myClientState_.userId, description)
+    .then(function(uproxyGistExists) {
+      if (!uproxyGistExists) {
+        console.log('trying to post new gist');
+        var xhr = new XMLHttpRequest();
+        var url = 'https://api.github.com/gists';
+        xhr.open('POST', url);
+        return new Promise(function(fulfill, reject) {
+          // TODO: error checking
+          xhr.onload = function() {
+            fulfill(true);
+          };
+          xhr.send({
+            "description": description,
+            "public": isPublic,
+            "files": {
+              "file1.txt": {
+                "content": "my key"
+              }
+            }
+          });
+        }.bind(this));
       }
-    });
   }.bind(this));
 };
 
@@ -255,14 +250,13 @@ GithubSocialProvider.prototype.getUserProfile_ = function(userId) {
   });
 };
 
-GithubSocialProvider.prototype.restoreFromStorage_ = function() {
+GithubSocialProvider.prototype.finishLogin_ = function() {
   //TODO read from storage
   // construct this.users_
 
-  // TODO check if it's not there and then:
   this.createGist_(PUBLIC_GIST_DESCRIPTION, true);
-  this.createGist_(HEARTBEAT_GIST_DESCRIPTION, false);
-  setInterval(this.heartbeat_.bind(this), 10000); // 10 secs for now
+  //this.createGist_(HEARTBEAT_GIST_DESCRIPTION, false);
+  //setInterval(this.heartbeat_.bind(this), 10000); // 10 secs for now
 };
 
 GithubSocialProvider.prototype.hearbeat_ = function() {
@@ -272,12 +266,12 @@ GithubSocialProvider.prototype.hearbeat_ = function() {
     if (typeof this.users_[user].hearbeat !== undefined) {
       this.pullGist_(this.users_[user].hearbeat).then(function(gist) {
         // TODO process and update clients
-      }
+      });
     }
     if (typeof this.users_[user].signaling != undefined) {
       this.pullGist_(this.users_[user].hearbeat).then(function(gist) {
         // TODO process and raise onMessage event
-      }
+      })
     }
   }
 };
@@ -291,7 +285,7 @@ GithubSocialProvider.prototype.inviteFriend = function(userId) {
     });
   }).catch(function(e) {
     console.error('can not invite friend, not a uproxy user');
-  )};
+  });
 };
 
 GithubSocialProvider.prototype.acceptInvite = function(userId) {
@@ -303,7 +297,6 @@ GithubSocialProvider.prototype.acceptInvite = function(userId) {
   // TODO update user profile
   //this.users_[userId].status = ;
 };
-
 /*
  * Returns a Promise which fulfills with all known ClientStates.
  */
@@ -336,36 +329,15 @@ GithubSocialProvider.prototype.logout = function() {
 /*
  * Adds a UserProfile.
  */
-GithubSocialProvider.prototype.addUserProfile_ = function(friendId) {
-  var xhr = new XMLHttpRequest();
-  var url = 'https://api.github.com/users/' + friendId;
-  xhr.open('GET', url);
-  return new Promise(function(fulfill, reject) {
-    // TODO: error checking
-    xhr.onload = function() {
-      var friend = JSON.parse(xhr.response);
-      var userProfile = {
-        userId: friend.login,
-        name: friend.name || friend.login || '',
-        lastUpdated: Date.now(),
-        url: friend.html_url || '',
-        imageData: friend.avatar_url || ''
-      };
-      this.dispatchEvent_('onUserProfile', userProfile);
-
-      var clientState = {
-        userId: friend.login,
-        clientId: friend.login,
-        lastUpdated: Date.now(),
-        lastSeen: Date.now(),
-        status: "ONLINE"
-      };
-      this.dispatchEvent_('onClientState', clientState);
-
-      return fulfill(userProfile);
-    }.bind(this);
-    xhr.send();
-  }.bind(this));
+GithubSocialProvider.prototype.addUserProfile_ = function(profile) {
+  var userProfile = {
+    userId: friend.login,
+    name: friend.name || friend.login || '',
+    lastUpdated: Date.now(),
+    url: friend.html_url || '',
+    imageData: friend.avatar_url || ''
+  };
+  this.dispatchEvent_('onUserProfile', userProfile);
 };
 
 /*
