@@ -78,6 +78,7 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
                 imageData: user.avatar_url
               };
               this.addUserProfile_(profile);
+              this.restoreFromStorage();
             }.bind(this));
           }.bind(this));
           xhr.send();
@@ -101,11 +102,11 @@ GithubSocialProvider.prototype.checkForUproxyGist_ = function(userId) {
     xhr.onload = function() {
       var publicGists = JSON.parse(this.response);
       for (var i = 0; i < publicGists.length; i++) {
-        if (publicGists[i].description === this.uproxyGistDescription_) {
-          return fulfill(true);
+        if (publicGists[i].description === PUBLIC_GIST_DESCRIPTION) {
+          return fulfill(publicGists[i].url);
         }
       }
-      return fulfill(false);
+      return reject('User does not have public freedom gist');
     };
     xhr.send();
   });
@@ -176,23 +177,38 @@ GithubSocialProvider.prototype.hearbeat_ = function() {
   // TODO pull my public gist and see if I have new users and raise onInvite event
   for (var user in this.users_) {
     if (typeof this.users_[user].hearbeat !== undefined) {
-      // TODO pull that gist and update client
+      this.pullGist_(this.users_[user].hearbeat).then(function(gist) {
+        // TODO process and update clients
+      }
     }
     if (typeof this.users_[user].signaling != undefined) {
-      // TODO pull that gist and raise onMessage event
+      this.pullGist_(this.users_[user].hearbeat).then(function(gist) {
+        // TODO process and raise onMessage event
+      }
     }
   }
 };
 
-GithubSocialProvider.prototype.inviteFriend = function() {
-  // TODO create private gist
-  // TODO post it to users public gist
-  // TODO get user profile
+GithubSocialProvider.prototype.inviteFriend = function(userId) {
+  this.checkForGist(userid).then(function(friendsGist) {
+    this.createGist_('signaling', false).then(function(signalingGist) {
+      // TODO anything else or is this ok?
+      this.postComment(friendsGist, signalingGist);
+      this.getUserProfile(userId); // TODO pass status
+    });
+  }).catch(function(e) {
+    console.error('can not invite friend, not a uproxy user');
+  )};
 };
 
-GithubSocialProvider.prototype.acceptInvite = function() {
-  // TODO post your private hearbeat gist url to your friend's public gist or private gist
+GithubSocialProvider.prototype.acceptInvite = function(userId) {
+  if (typeof this.users_[userId].signaling === undefined) {
+    return Promise.reject('No invite from this user');
+  };
+
+  this.postComment(this.users_[userid].signaling, this.hearbeat);
   // TODO update user profile
+  //this.users_[userId].status = ;
 };
 
 /*
