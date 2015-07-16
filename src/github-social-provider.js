@@ -12,7 +12,7 @@ var GithubSocialProvider = function(dispatchEvent) {
 
   this.gists = [];
   this.userProfiles = {};
-  this.userToUproxyGistUrl_ = {}; // map client to uproxy gist url.
+  this.userToPublicGistUrl_ = {}; // map client to uproxy gist url.
   this.myClientState_ = {};
 
   this.initLogger_('GithubSocialProvider');
@@ -123,7 +123,7 @@ GithubSocialProvider.prototype.checkForUproxyGist_ = function(userId) {
       console.log(gists);
       for (var i = 0; i < gists.length; i++) {
         if (gists[i].description === this.uproxyGistDescription_) {
-          this.userToUproxyGistUrl_[userId] = gists[i].url;
+          this.userToPublicGistUrl_[userId] = gists[i].url;
           return fulfill(true);
         }
       }
@@ -192,19 +192,49 @@ GithubSocialProvider.prototype.loadContacts_ = function() {
  * @param comment comment to post
  */
 GithubSocialProvider.prototype.postComment_ = function(gist, comment) {
-  var xhr = freedom["core.xhr"]();
-  xhr.open('POST', gist, true);
-  xhr.setRequestHeader('Content-Type', 'application/json');
-  xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
-  xhr.on('onload', function() {
-    xhr.getStatus().then(function(status) {
-      console.log(status);
-    });
-  });
-  xhr.send({string: '{"body":"' + comment + '"}'});
+  return new Promise(function(fulfill, reject) {
+    var xhr = freedom["core.xhr"]();
+    xhr.open('POST', gist, true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
+    xhr.on('onload', function() {
+      xhr.getStatus().then(function(status) {
+        if (status === 201) {
+          fulfill();
+        } else {
+          reject();
+        }
+      }.bind(this));
+    }.bind(this));
+    xhr.send({string: JSON.stringify({
+      "body" : comment
+    })});
+  }.bind(this));
 };
 
+/*
+ * Get given gist.
+ * @param gist    url with form https://api.github.com/gists/:id
+ */
 GithubSocialProvider.prototype.pullGist_ = function(gist) {
+  return new Promise(function(fulfill, reject) {
+    var xhr = freedom["core.xhr"]();
+    xhr.open('GET', gist + '/comments', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
+    xhr.on('onload', function() {
+      xhr.getStatus().then(function(status) {
+        if (status === 201) {
+          xhr.getResponseText().then(function(responseText) {
+            fulfill(responseText);
+          }.bind(this));
+        } else {
+          reject();
+        }
+      }.bind(this));
+    }.bind(this));
+    xhr.send({string: '{"body":"' + comment + '"}'});
+  }.bind(this));
 };
 
 GithubSocialProvider.prototype.getUserProfile_ = function(userId) {
@@ -277,8 +307,8 @@ GithubSocialProvider.prototype.getUsers = function() {
 /*
  * Sends a message to another clientId.
  */
-GithubSocialProvider.prototype.sendMessage = function(friend, message) {
-  return Promise.resolve();
+GithubSocialProvider.prototype.sendMessage = function(toClientId, message) {
+  return this.postComment_(this.userToPublicGistUrl_[toClientId] + '/comments', message);
 };
 
 /*
