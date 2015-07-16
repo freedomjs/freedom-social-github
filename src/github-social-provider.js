@@ -70,7 +70,7 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
               console.log(user);
               var clientState = {
                 userId: user.login,
-                clientId: 'myClientId',
+                clientId: user.login,
                 status: "ONLINE",
                 lastUpdated: Date.now(),
                 lastSeen: Date.now()
@@ -88,6 +88,7 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
               });
 
               this.loadContacts_();
+              setInterval(this.checkForNewMessages_.bind(this), 10000);
 
               var profile = {
                 userId: user.login,
@@ -114,8 +115,8 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
 GithubSocialProvider.prototype.checkForUproxyGist_ = function(userId) {
   var xhr = new XMLHttpRequest();
   var url = 'https://api.github.com/users/' + userId + '/gists';
-  console.log('getting gists');
   xhr.open('GET', url);
+  xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
   return new Promise(function(fulfill, reject) {
     // TODO: error checking
     xhr.onload = function() {
@@ -167,6 +168,7 @@ GithubSocialProvider.prototype.loadContacts_ = function() {
   var xhr = new XMLHttpRequest();
   var url = 'https://api.github.com/users/' + this.myClientState_.userId + '/followers';
   xhr.open('GET', url);
+  xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
   return new Promise(function(fulfill, reject) {
     // TODO: error checking
     xhr.onload = function() {
@@ -198,18 +200,35 @@ GithubSocialProvider.prototype.postComment_ = function(gist, comment) {
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
     xhr.on('onload', function() {
-      xhr.getStatus().then(function(status) {
-        if (status === 201) {
-          fulfill();
-        } else {
-          reject();
-        }
-      }.bind(this));
+      fulfill();
     }.bind(this));
     xhr.send({string: JSON.stringify({
       "body" : comment
     })});
   }.bind(this));
+};
+
+
+/*
+ * Check for new messages (i.e. comments on your public gist)
+ * @param gist    url with form https://api.github.com/gists/:id
+ */
+GithubSocialProvider.prototype.checkForNewMessages_ = function() {
+  this.pullGist_(this.userToPublicGistUrl_[this.myClientState_.userId]).then(
+    function(gistComments) {
+      for (var i = 0; i < gistComments.length; i++) {
+        var clientState = {
+          userId: gistComments[i].user.login,
+          clientId: gistComments[i].user.login,
+          lastUpdated: gistComments[i].created_at,
+          lastSeen: gistComments[i].created_at,
+          status: "ONLINE"
+        };
+        this.dispatchEvent_(
+            'onMessage', {from: clientState, message: gistComments[i].body});
+        // TODO: delete the comment we just dispatched.
+      }
+    }.bind(this));
 };
 
 /*
@@ -220,15 +239,10 @@ GithubSocialProvider.prototype.pullGist_ = function(gist) {
   return new Promise(function(fulfill, reject) {
     var xhr = freedom["core.xhr"]();
     xhr.open('GET', gist + '/comments', true);
+    xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
     xhr.on('onload', function() {
-      xhr.getStatus().then(function(status) {
-        if (status === 201) {
-          xhr.getResponseText().then(function(responseText) {
-            fulfill(responseText);
-          }.bind(this));
-        } else {
-          reject();
-        }
+      xhr.getResponseText().then(function(responseText) {
+        fulfill(JSON.parse(responseText));
       }.bind(this));
     }.bind(this));
     xhr.send();
@@ -238,6 +252,7 @@ GithubSocialProvider.prototype.pullGist_ = function(gist) {
 GithubSocialProvider.prototype.getUserProfile_ = function(userId) {
   var xhr = freedom["core.xhr"]();
   xhr.open('GET', 'https://api.github.com/users/:' + userId + '?access_token=' + this.access_token, true);
+  xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
   xhr.on('onload', function() {
     xhr.getResponseText().then(function(text) {
       var user = JSON.parse(text);
@@ -324,6 +339,7 @@ GithubSocialProvider.prototype.addUserProfile_ = function(friendId) {
   var xhr = new XMLHttpRequest();
   var url = 'https://api.github.com/users/' + friendId;
   xhr.open('GET', url);
+  xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
   return new Promise(function(fulfill, reject) {
     // TODO: error checking
     xhr.onload = function() {
