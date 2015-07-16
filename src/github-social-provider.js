@@ -182,11 +182,6 @@ GithubSocialProvider.prototype.loadContacts_ = function() {
   }.bind(this));
 };
 
-/*
- * Post on given gist with given comment.
- * @param gist    url with form https://api.github.com/gists/:id/comments
- * @param comment comment to post
- */
 GithubSocialProvider.prototype.postComment_ = function(gist, comment) {
   return new Promise(function(fulfill, reject) {
     var xhr = freedom["core.xhr"]();
@@ -331,11 +326,11 @@ GithubSocialProvider.prototype.logout = function() {
  */
 GithubSocialProvider.prototype.addUserProfile_ = function(profile) {
   var userProfile = {
-    userId: friend.login,
-    name: friend.name || friend.login || '',
+    userId: profile.userId,
+    name: profile.name || profile.userId || '',
     lastUpdated: Date.now(),
-    url: friend.html_url || '',
-    imageData: friend.avatar_url || ''
+    url: profile.url || '',
+    imageData: profile.imageData || ''
   };
   this.dispatchEvent_('onUserProfile', userProfile);
 };
