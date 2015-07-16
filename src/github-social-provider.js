@@ -168,11 +168,11 @@ GithubSocialProvider.prototype.loadContacts_ = function() {
     // TODO: error checking
     xhr.onload = function() {
       var followers = JSON.parse(xhr.response);
-      for (var i = 0; i < followers.length; ++i) {
+      for (var i = 0; i < followers.length; i++) {
         var follower = followers[i];
-        console.log(follower);
-        this.checkForUproxyGist_(follower.login)
+        this.checkForGist_(follower.login, this.uproxyGistDescription_)
             .then(function(uproxyGistExists) {
+          console.log(follower.login + ' has uproxy? ' + uproxyGistExists);
           if (uproxyGistExists) {
             this.addUserProfile_(follower.login);
           }
@@ -205,6 +205,23 @@ GithubSocialProvider.prototype.postComment_ = function(gist, comment) {
 
 
 /*
+ * Delete a comment.
+ * @param gist    url with form https://api.github.com//gists/:gist_id/comments/:id
+ * @param comment comment to post
+ */
+GithubSocialProvider.prototype.deleteComment_ = function(comment) {
+  return new Promise(function(fulfill, reject) {
+    var xhr = freedom["core.xhr"]();
+    xhr.open('DELETE', comment, true);
+    xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
+    xhr.on('onload', function() {
+      fulfill();
+    }.bind(this));
+    xhr.send();
+  }.bind(this));
+};
+
+/*
  * Check for new messages (i.e. comments on your public gist)
  * @param gist    url with form https://api.github.com/gists/:id
  */
@@ -222,6 +239,7 @@ GithubSocialProvider.prototype.checkForNewMessages_ = function() {
         this.dispatchEvent_(
             'onMessage', {from: clientState, message: gistComments[i].body});
         // TODO: delete the comment we just dispatched.
+        this.deleteComment_(gistComments[i].url);
       }
     }.bind(this));
 };
@@ -285,7 +303,7 @@ GithubSocialProvider.prototype.hearbeat_ = function() {
     if (typeof this.users_[user].signaling != undefined) {
       this.pullGist_(this.users_[user].hearbeat).then(function(gist) {
         // TODO process and raise onMessage event
-      })
+      });
     }
   }
 };
@@ -305,7 +323,7 @@ GithubSocialProvider.prototype.inviteFriend = function(userId) {
 GithubSocialProvider.prototype.acceptInvite = function(userId) {
   if (typeof this.users_[userId].signaling === undefined) {
     return Promise.reject('No invite from this user');
-  };
+  }
 
   this.postComment(this.users_[userid].signaling, this.hearbeat);
   // TODO update user profile
