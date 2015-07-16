@@ -220,8 +220,6 @@ GithubSocialProvider.prototype.pullGist_ = function(gist) {
   return new Promise(function(fulfill, reject) {
     var xhr = freedom["core.xhr"]();
     xhr.open('GET', gist + '/comments', true);
-    xhr.setRequestHeader('Content-Type', 'application/json');
-    xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
     xhr.on('onload', function() {
       xhr.getStatus().then(function(status) {
         if (status === 201) {
@@ -233,7 +231,7 @@ GithubSocialProvider.prototype.pullGist_ = function(gist) {
         }
       }.bind(this));
     }.bind(this));
-    xhr.send({string: '{"body":"' + comment + '"}'});
+    xhr.send();
   }.bind(this));
 };
 
