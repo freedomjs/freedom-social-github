@@ -37,6 +37,12 @@ GithubSocialProvider.prototype.initLogger_ = function(moduleName) {
   }
 };
 
+// TODO(ldixon): We cannot use OAuth flow with the client secret for a non-web
+// app (i.e. in uProxy). See https://developer.github.com/v3/oauth/#non-web-
+// application-flow for the right way to do this.  If we include the client
+// secret, as bellow, then the client secret is public and we open ourselves up
+// to abuse and to abuse.
+
 /*
  * Login to social network, returns a Promise that fulfills on login.
  */
@@ -44,6 +50,7 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
   return new Promise(function(fulfillLogin, rejectLogin) {
     var OAUTH_REDIRECT_URLS = [
       "https://www.uproxy.org/oauth-redirect-uri",
+      // TODO: Why are the three below here?
       "http://freedomjs.org/",
       "http://localhost:8080/",
       "https://fmdppkkepalnkeommjadgbhiohihdhii.chromiumapp.org/"
@@ -176,16 +183,6 @@ GithubSocialProvider.prototype.loadContacts_ = function() {
     // TODO: error checking
     xhr.onload = function() {
       var followers = JSON.parse(xhr.response);
-      for (var i = 0; i < followers.length; ++i) {
-        var follower = followers[i];
-        console.log(follower);
-        this.checkForUproxyGist_(follower.login)
-            .then(function(uproxyGistExists) {
-          if (uproxyGistExists) {
-            this.addUserProfile_(follower.login);
-          }
-        }.bind(this));
-      }
     }.bind(this);
     xhr.send();
   }.bind(this));
@@ -351,7 +348,7 @@ GithubSocialProvider.prototype.inviteFriend = function(userId) {
 GithubSocialProvider.prototype.acceptInvite = function(userId) {
   if (typeof this.users_[userId].signaling === undefined) {
     return Promise.reject('No invite from this user');
-  };
+  }
 
   this.postComment(this.users_[userid].signaling, this.hearbeat);
   // TODO update user profile

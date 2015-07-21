@@ -16,7 +16,7 @@ module.exports = function(grunt) {
     // NOTE - some copy commands are written in order, i.e. depend on previous
     copy: {
       dist: {
-        src: ['src/*.js*'],
+        src: ['src/*.js*', 'src/*.ts'],
         dest: 'dist/',
         flatten: true,
         filter: 'isFile',
