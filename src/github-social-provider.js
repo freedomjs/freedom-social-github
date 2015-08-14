@@ -4,16 +4,27 @@
 var PUBLIC_GIST_DESCRIPTION = 'freedom_public';
 var HEARTBEAT_GIST_DESCRIPTION = 'freedom_hearbeat';
 
+var MESSAGE_TYPES = {
+  INVITE: 0,
+  ACCEPT_INVITE: 1,
+  HEARTBEAT: 2,
+  MESSAGE: 3
+};
+
+var STATUS = {
+  FRIEND: 0,
+  INVITED_BY_USER: 1,
+  USER_INVITED: 2
+};
+
 var GithubSocialProvider = function(dispatchEvent) {
   this.dispatchEvent_ = dispatchEvent;
   this.networkName_ = 'github';
-  // TODO: rename uproxyGistDescription.
-  this.uproxyGistDescription_ = 'test';
 
   this.gists = [];
   this.userProfiles = {};
-  this.userToPublicGistUrl_ = {}; // map client to uproxy gist url.
   this.myClientState_ = {};
+  this.clientStates_ = {};
 
   this.initLogger_('GithubSocialProvider');
   this.storage = freedom['core.storage']();
@@ -21,7 +32,7 @@ var GithubSocialProvider = function(dispatchEvent) {
   this.users_ = {};
   this.myHeartbeatGist_ = '';
   this.myPublicGist_ = '';
-  this.lastSeenTime_ = Date.now();
+  this.lastSeenTime_ = 0; //Date.now();
 };
 
 /*
@@ -50,7 +61,6 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
   return new Promise(function(fulfillLogin, rejectLogin) {
     var OAUTH_REDIRECT_URLS = [
       "https://www.uproxy.org/oauth-redirect-uri",
-      // TODO: Why are the three below here?
       "http://freedomjs.org/",
       "http://localhost:8080/",
       "https://fmdppkkepalnkeommjadgbhiohihdhii.chromiumapp.org/"
@@ -69,7 +79,6 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
                 '&client_id=98d31e7ceefe0518a093' +
                 '&client_secret=f77bf1477d4ade44d2dff674e2ff742ed540b3a1', true);
       xhr.on('onload', function() {
-        console.log('xhr loaded');
         xhr.getResponseText().then(function(text) {
           this.access_token = text.match(/access_token=([^&]+)/)[1];
           xhr = new freedom["core.xhr"]();
@@ -77,10 +86,11 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
           xhr.on('onload', function() {
             xhr.getResponseText().then(function(text) {
               var user = JSON.parse(text);
-              console.log(user);
+              /// XXX Do I need to fix this?
+              var clientId = Math.random().toString();
               var clientState = {
                 userId: user.login,
-                clientId: 'myClientId', // TODO generate client id
+                clientId: clientId,
                 status: "ONLINE",
                 lastUpdated: Date.now(),
                 lastSeen: Date.now()
@@ -118,17 +128,15 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
 GithubSocialProvider.prototype.checkForGist_ = function(userId, description) {
   var xhr = new XMLHttpRequest();
   var url = 'https://api.github.com/users/' + userId + '/gists';
-  console.log('getting gists');
   xhr.open('GET', url);
   xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
+  xhr.setRequestHeader("If-Modified-Since", "Sat, 2 Jan 2005 00:00:00 GMT");
   return new Promise(function(fulfill, reject) {
     // TODO: error checking
     xhr.onload = function() {
       var gists = JSON.parse(xhr.response);
-      console.log(gists);
       for (var i = 0; i < gists.length; i++) {
         if (gists[i].description ===  description) {
-          this.userToPublicGistUrl_[userId] = gists[i].url;
           return fulfill(gists[i].id);
         }
       }
@@ -151,14 +159,14 @@ GithubSocialProvider.prototype.createGist_ = function(description, isPublic) {
         return new Promise(function(fulfill, reject) {
           // TODO: error checking
           xhr.onload = function() {
-            console.log(xhr.responseText);
+            //console.log(xhr.responseText);
             fulfill(JSON.parse(xhr.responseText).id);
           };
           xhr.send(JSON.stringify({
             "description": description,
             "public": isPublic,
             "files": {
-              'file': {  // TODO generate random string as filename
+              'file': {
                 "content": "my key"
               }
             }
@@ -188,7 +196,7 @@ GithubSocialProvider.prototype.loadContacts_ = function() {
   }.bind(this));
 };
 
-GithubSocialProvider.prototype.postComment_ = function(gistId, comment) {
+GithubSocialProvider.prototype.postComment_ = function(gistId, messageType, comment, toClient) {
   return new Promise(function(fulfill, reject) {
     var xhr = freedom["core.xhr"]();
     var url = 'https://api.github.com/gists/' + gistId + '/comments';
@@ -196,19 +204,25 @@ GithubSocialProvider.prototype.postComment_ = function(gistId, comment) {
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
     xhr.on('onload', function() {
-      xhr.getResponseText().then(function(text) {
-        console.log(text);
-      });
       xhr.getStatus().then(function(status) {
         if (status === 201) {
-          fulfill();
+          xhr.getResponseText().then(function(text) {
+            var comment = JSON.parse(text);
+            fulfill(comment.url);
+          });
         } else {
           reject();
         }
       }.bind(this));
     }.bind(this));
+    var message = {
+      clientId: this.myClientState_.clientId,
+      messageType: messageType,
+      toClient: toClient,
+      message: comment
+    };
     xhr.send({string: JSON.stringify({
-      "body" : comment
+      "body" : JSON.stringify(message)
     })});
   }.bind(this));
 };
@@ -217,27 +231,45 @@ GithubSocialProvider.prototype.postComment_ = function(gistId, comment) {
  * Get given gist.
  * @param gist    url with form https://api.github.com/gists/:id
  */
-GithubSocialProvider.prototype.pullGist_ = function(gistId) {
+GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
   return new Promise(function(fulfill, reject) {
+    if (typeof page === 'undefined') {
+      page = 1;
+    }
     var xhr = freedom["core.xhr"]();
-    var url = 'https://api.github.com/gists/' + gistId + '/comments';
+    var url = 'https://api.github.com/gists/' + gistId + '/comments?page=' + page
     xhr.open('GET', url, true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
+    var date = new Date(this.lastSeenTime_).toGMTString();
+    xhr.setRequestHeader("If-Modified-Since", date); //"Sat, 1 Jan 2005 00:00:00 GMT");
     xhr.on('onload', function() {
       xhr.getStatus().then(function(status) {
-        if (true) {//status === 201) {
+        console.log(status);
+        if (status === 200) {
           xhr.getResponseText().then(function(responseText) {
             var comments = JSON.parse(responseText);
             var new_comments = [];
             for (var i in comments) {
-              // XXX this is a string
-              if (comments[i].updated_at > this.lastSeenTime_) {
-                new_comments.push({
+              if (Date.parse(comments[i].updated_at) > this.lastSeenTime_) {
+                var comment = {
                   from: comments[i].user.login,
-                  body: comments[i].body
-                });
+                  body: comments[i].body,
+                  url: comments[i].url
+                };
+
+                if (this.isValidMessage_(comment, from)) {
+                  new_comments.push(comment);
+                }
               }
             }
-            fulfill(new_comments);
+            if (comments.length === 30) {
+              this.pullGist_(gistId, from, page+1).then(function(other_comments) {
+                fulfill(new_comments.concat(other_comments));
+              });
+            } else {
+              fulfill(new_comments);
+            }
           }.bind(this));
         } else {
           reject();
@@ -249,107 +281,266 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId) {
 };
 
 GithubSocialProvider.prototype.getUserProfile_ = function(userId) {
-  var xhr = freedom["core.xhr"]();
-  xhr.open('GET', 'https://api.github.com/users/:' + userId + '?access_token=' + this.access_token, true);
-  xhr.on('onload', function() {
-    xhr.getResponseText().then(function(text) {
-      var user = JSON.parse(text);
-      console.log(user);
-      var profile = {
-        userId: user.login,
-        name: user.nameGist,
-        lastUpdated: Date.now(),
-        url: user.url,
-        imageData: user.avatar_url,
-      };
-      this.addUserProfile_(profile);
-    });
-  });
+  return new Promise(function(fulfill, reject) {
+    var xhr = freedom["core.xhr"]();
+    xhr.open('GET', 'https://api.github.com/users/' + userId + '?access_token=' + this.access_token, true);
+    xhr.on('onload', function() {
+      xhr.getResponseText().then(function(text) {
+        var user = JSON.parse(text);
+        //console.log(user);
+        var profile = {
+          userId: user.login,
+          name: user.nameGist,
+          lastUpdated: Date.now(),
+          url: user.url,
+          imageData: user.avatar_url,
+        };
+        fulfill(this.addUserProfile_(profile));
+      }.bind(this));
+    }.bind(this));
+    xhr.send();
+  }.bind(this));
+};
+
+GithubSocialProvider.prototype.restoreFromStorage_ = function() {
+  this.createGist_('storage', false).then(function(gistId) {
+    this.pullGist_(gistId, this.myClientState_.userId).then(function(comments) {
+      switch (comments.length) {
+        case 0:
+          this.postComment_(gistId, -1, this.users_).then(function(url) {
+            this.myStorageGist_ = url;
+          }.bind(this));
+          break;
+        case 1:
+          try {
+            var body = JSON.parse(comments[0].body);
+            this.users_ = body.message;
+            this.myStorageGist_ = comments[0].url;
+          } catch (e) {
+            console.error(e);
+          }
+          break;
+        default: console.error("no good");
+      }
+    }.bind(this));
+  }.bind(this));
 };
 
 GithubSocialProvider.prototype.finishLogin_ = function() {
   //TODO read from storage
   // construct this.users_
+  this.restoreFromStorage_();
   this.createGist_(PUBLIC_GIST_DESCRIPTION, true).then(function(gistId) {
     this.myPublicGist_ = gistId;
   }.bind(this));
   this.createGist_(HEARTBEAT_GIST_DESCRIPTION, false).then(function(gistId) {
-    this.myHeartbeatGist_ = gistId;
+    this.users_[this.myClientState_.userId].heartbeat = gistId;
+    this.pullGist_(gistId, this.myClientState_.userId).then(function(heartbeats) {
+      for (var i in heartbeats) {
+        var comment = JSON.parse(heartbeats[i].body);
+        if(comment.messageType === MESSAGE_TYPES.HEARTBEAT
+           && comment.clientId === this.myClientState_.clientId){
+          this.myHeartbeatGist_ = heartbeats[i].url;
+          break;
+        }
+      }
+
+      if (this.myHeartbeatGist_ === '') {
+        this.postComment_(gistId,
+                          MESSAGE_TYPES.HEARTBEAT,
+                          {date: Date.now()}).then(function(gistUrl) {
+            this.myHeartbeatGist_ = gistUrl;
+        }.bind(this));
+      }
+    }.bind(this)).catch(function(E) {
+      console.error(e);
+    });
   }.bind(this));
-  setInterval(this.heartbeat_.bind(this), 20000); // 10 secs for now
+  this.heartbeatIntervalId_ = setInterval(this.heartbeat_.bind(this), 100); // 10 secs for now
+};
+
+GithubSocialProvider.prototype.parseHeartbeat_ = function(userId, heartbeats) {
+  var onlineClients = {};
+  for (var i in heartbeats) {
+    var comment = JSON.parse(heartbeats[i].body);
+    if (comment.messageType !== MESSAGE_TYPES.HEARTBEAT) {
+      console.error('not a heartbeat');
+      continue;
+    }
+    onlineClients[comment.clientId] = true;
+    this.addOrUpdateClient_(userId, comment.clientId, 'ONLINE');
+  }
+
+  for (var clientId in this.clientStates_) {
+    if (this.clientStates_[clientId].userId === userId &&
+        typeof onlineClients[clientId] === 'undefined'
+        && clientId !== this.myClientState_.clientId) {
+      this.addOrUpdateClient_(userId, clientId, 'OFFLINE');
+    }
+  }
+};
+
+GithubSocialProvider.prototype.isValidMessage_ = function(comment, from) {
+  try {
+    var message = JSON.parse(comment.body);
+  } catch (e) {
+    return false;
+  }
+  if (typeof message.messageType === 'undefined'
+      || typeof message.clientId === 'undefined') {
+    console.error('malformed message', message);
+    // XXX return false;
+    return true;;
+  }
+
+  if (typeof from !== 'undefined' && from !== comment.from) {
+    // Message is not who I expect it to be from;
+    // This is possible, so not an error, but still drop it.
+    return false;
+  }
+
+  if (message.messageType == MESSAGE_TYPES.message) {
+    // If it's a message on signaling channel
+    //
+    if (typeof message.toClient === 'undefined') {
+      console.error('malformed message', message);
+      return false;
+    }
+
+    if (message.toClient !== this.myClientState_.clientId) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+GithubSocialProvider.prototype.parseMessages_ = function(messages, from) {
+  for (var i in messages) {
+    var comment = JSON.parse(messages[i].body);
+
+    if (comment.messageType === MESSAGE_TYPES.ACCEPT_INVITE) {
+      this.users_[messages[i].from].heartbeat = comment.message.heartbeat;
+      this.users_[messages[i].from].status = STATUS.FRIEND;
+      this.saveToStorage_();
+      /// XXX raise an event
+      continue;
+    }
+
+    var clientState = {
+      userId: messages[i].from,
+      clientId: comment.clientId,
+      status: 'ONLINE',
+      lastUpdated: Date.now(),
+      lastSeen: Date.now()
+    };
+
+    this.handleMessage_(clientState, comment.message);
+  }
+};
+
+
+GithubSocialProvider.prototype.modifyComment_ = function(commentUrl, body) {
+  if (typeof commentUrl === 'undefined'
+      || commentUrl === '') {
+    return;
+  }
+  var xhr = freedom["core.xhr"]();
+  xhr.open('PATCH', commentUrl, true);
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
+  xhr.on('onload', function() {
+    xhr.getResponseText().then(function(responseText) {
+      //console.log(responseText);
+    });
+    xhr.getStatus().then(function(status) {
+      console.log(status);
+    });
+  });
+  xhr.send({string: JSON.stringify({
+    "body": JSON.stringify(body)
+  })});
+};
+
+GithubSocialProvider.prototype.saveToStorage_ = function() {
+  this.modifyComment_(this.myStorageGist_, {message: this.users_});
 };
 
 GithubSocialProvider.prototype.heartbeat_ = function() {
-  console.log('hearbeat running');
-  if (this.myHeartbeatGist_ === '') {
-    return;
+  var currentTime = Date.now();
+  /*
+  this.modifyComment_(this.myHeartbeatGist_,
+                      {clientId: this.myClientState_.clientId,
+                       messageType: MESSAGE_TYPES.HEARTBEAT,
+                       message: {
+                        date: Date.now()
+                      }});
+*/
+  var promises = [];
+  if (this.myPublicGist_ !== '') {
+    promises.push(this.pullGist_(this.myPublicGist_).then(function(comments) {
+      for (var i in comments) {
+        var comment = JSON.parse(comments[i].body);
+        if (comment.messageType === MESSAGE_TYPES.INVITE) {
+          this.getUserProfile_(comments[i].from).then(function(profile) {
+            profile.heartbeat = comment.message.heartbeat;
+            profile.signaling = comment.message.signaling;
+            profile.status = STATUS.INVITED_BY_USER;
+            this.saveToStorage_();
+          }.bind(this));
+        }
+      }
+    }.bind(this)));
   }
-  this.postComment_(this.myHeartbeatGist_,
-                   JSON.stringify({clientId: this.myClientState_.clientId,
-                                   date: Date.now()}));
-  this.pullGist_(this.myPublicGist_).then(function(comments) {
-    console.log(comments);
-  }.bind(this)).catch(function(e) {
-    console.error(e);
-  }); 
-
-
-  // TODO this is a bug
-  this.lastSeenTime_ = Date.now();
-
+/*
   for (var user in this.users_) {
-    if (typeof this.users_[user].hearbeat !== undefined) {
-      this.pullGist_(this.users_[user].hearbeat).then(function(heartbeats) {
-        var onlineClients = {};
-        for (var i in heartbeats) {
-          var comment = JSON.parse(heartbeat.body);
-          if (typeof comment.clientId !== undefined) {
-            onlineClients[comment.clientId] = true;
-          }
-        }
-        for (var client in this.users_[user].clients) {
-            // update client;
-        }
-      }.bind(this));
+    if (typeof this.users_[user].heartbeat !== 'undefined'
+        && this.users_[user].status === STATUS.FRIEND) {
+      var heart = this.users_[user].heartbeat;
+      promises.push(this.pullGist_(heart, user).then(this.parseHeartbeat_.bind(this, user)));
     }
-    if (typeof this.users_[user].signaling != undefined) {
-      this.pullGist_(this.users_[user].signaling).then(function(messages) {
-        for (var i in messages) {
-          var comment = JSON.parse(messages[i].body);
-          var clientState = {
-            userId: messages[i].from,
-            clientId: comment.clientId
-          };
-          this.handleMessage_(clientState, comment.message);
-        }
-      }.bind(this));
+    if (typeof this.users_[user].signaling != 'undefined') {
+      promises.push(this.pullGist_(this.users_[user].signaling, user).then(this.parseMessages_.bind(this)));
     }
   }
+*/
+  Promise.all(promises).then(function() {
+    this.lastSeenTime_ = currentTime;
+  }.bind(this));
 };
 
 GithubSocialProvider.prototype.inviteUser = function(userId) {
-  return this.checkForGist(userid).then(function(friendsGist) {
-    this.getUserProfile(userId); // TODO pass status
+  return this.checkForGist_(userId, PUBLIC_GIST_DESCRIPTION).then(function(friendGist) {
     if (friendGist === '') {
       return Promise.reject('Not a uproxy user');
     }
     return this.createGist_('signaling:' + userId, false).then(function(signalingGist) {
-      // TODO anything else or is this ok?
-      return this.postComment(friendsGist, signalingGist);
-    });
-  }).catch(function(e) {
+      return this.getUserProfile_(userId).then(function(profile) {
+        profile.status = STATUS.USER_INVITED;
+        profile.signaling = signalingGist;
+        this.saveToStorage_();
+        return this.postComment_(friendGist,
+                                 MESSAGE_TYPES.INVITE,
+                                 {heartbeat :this.users_[this.myClientState_.userId].heartbeat,
+                                  signaling: signalingGist});
+      }.bind(this));
+    }.bind(this));
+  }.bind(this)).catch(function(e) {
     console.error('can not invite friend, not a uproxy user');
   });
 };
 
-GithubSocialProvider.prototype.acceptInvite = function(userId) {
-  if (typeof this.users_[userId].signaling === undefined) {
+GithubSocialProvider.prototype.acceptUserInvitation = function(userId) {
+  var signalingGist = this.users_[userId].signaling;
+  if (typeof signalingGist === 'undefined') {
     return Promise.reject('No invite from this user');
   }
+  this.users_[userId].status = STATUS.FRIEND;
+  this.saveToStorage_();
 
-  this.postComment(this.users_[userid].signaling, this.hearbeat);
-  // TODO update user profile
-  //this.users_[userId].status = ;
+  return this.postComment_(signalingGist,
+                           MESSAGE_TYPES.ACCEPT_INVITE,
+                           {heartbeat :this.users_[this.myClientState_.userId].heartbeat});
 };
 /*
  * Returns a Promise which fulfills with all known ClientStates.
@@ -369,13 +560,22 @@ GithubSocialProvider.prototype.getUsers = function() {
  * Sends a message to another clientId.
  */
 GithubSocialProvider.prototype.sendMessage = function(toClientId, message) {
-  return this.postComment_(this.userToPublicGistUrl_[toClientId] + '/comments', message);
+  /*
+  if (this.clientStates_[toClientId].status !== 'ONLINE') {
+    return Promise.reject('Client not online');
+  }
+  */
+
+  var userId = this.clientStates_[toClientId].userId;
+  var signalingGist = this.users_[userId].signaling;
+  return this.postComment_(signalingGist, MESSAGE_TYPES.MESSAGE, message, toClientId);
 };
 
 /*
  * Logs out of the social network.
  */
 GithubSocialProvider.prototype.logout = function() {
+  clearInterval(this.heartbeatIntervalId_);
   return Promise.resolve();
 };
 
@@ -391,8 +591,8 @@ GithubSocialProvider.prototype.addUserProfile_ = function(profile) {
     url: profile.url || '',
     imageData: profile.imageData || ''
   };
-  this.users_[profile.userId] = profile;
   this.dispatchEvent_('onUserProfile', userProfile);
+  return this.users_[profile.userId] = profile;
 };
 
 /*
@@ -407,6 +607,8 @@ GithubSocialProvider.prototype.addOrUpdateClient_ =
     lastUpdated: Date.now(),
     lastSeen: Date.now()
   };
+
+  this.clientStates_[clientId] = clientState;
   this.dispatchEvent_('onClientState', clientState);
   return clientState;
 };
@@ -423,9 +625,10 @@ GithubSocialProvider.prototype.handleMessage_ =
 
 // Register provider when in a module context.
 if (typeof freedom !== 'undefined') {
-  if (!freedom.social) {
+  if (!freedom.social2) {
     freedom().providePromises(GithubSocialProvider);
   } else {
-    freedom.social().providePromises(GithubSocialProvider);
+    freedom.social2().providePromises(GithubSocialProvider);
   }
 }
+

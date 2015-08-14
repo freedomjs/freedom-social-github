@@ -54,17 +54,13 @@
 
       "inviteUser": {
         "type": "method",
-        "value": [{
-          "userId": "string"
-        }],
+        "value": ["string"],
         "ret": "Object"
       },
 
       "acceptUserInvitation": {
        "type": "method",
-        "value": [{
-          "userId": "string"
-        }]
+        "value": ["string"]
       },
 
       "blockUser": {
@@ -76,9 +72,7 @@
 
       "removeUser": {
        "type": "method",
-        "value": [{
-          "userId": "string"
-        }]
+        "value": [ "string"]
       },
 
       "clearCachedCredentials": {"type": "method", "value": []},
