@@ -133,7 +133,7 @@ GithubSocialProvider.prototype.prepareClientId_ = function() {
       if (typeof clientId !== 'undefined' && clientId !== null) {
         fulfill(clientId);
       } else {
-        var clientId = Math.random().toString();
+        clientId = Math.random().toString();
         this.storage_.set('clientId', clientId);
         fulfill(clientId);
       }
@@ -262,7 +262,7 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
     }
 
     var xhr = freedom["core.xhr"]();
-    var url = 'https://api.github.com/gists/' + gistId + '/comments?page=' + page
+    var url = 'https://api.github.com/gists/' + gistId + '/comments?page=' + page;
     xhr.open('GET', url, true);
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
@@ -383,8 +383,8 @@ GithubSocialProvider.prototype.finishLogin_ = function() {
     this.pullGist_(gistId, this.myClientState_.userId).then(function(heartbeats) {
       for (var i in heartbeats) {
         var comment = JSON.parse(heartbeats[i].body);
-        if(comment.messageType === MESSAGE_TYPES.HEARTBEAT
-           && comment.clientId === this.myClientState_.clientId){
+        if(comment.messageType === MESSAGE_TYPES.HEARTBEAT &&
+           comment.clientId === this.myClientState_.clientId) {
           this.myHeartbeatGist_ = heartbeats[i].url;
           break;
         }
@@ -417,11 +417,11 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
         this.eTags_ = {};
       }
 
-      if (result == null) {
+      if (result === null) {
         this.eTags_ = {};
       }
       fulfill();
-    }.bind(this))
+    }.bind(this));
   }.bind(this)));
 
   promises.push(new Promise(function(fulfill, reject) {
@@ -432,15 +432,15 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
         this.lastUpdatedTimestamp_ = {};
       }
 
-      if (result == null) {
+      if (result === null) {
         this.lastUpdatedTimestamp_ = {};
       }
       fulfill();
-    }.bind(this))
+    }.bind(this));
   }.bind(this)));
 
   return Promise.all(promises);
-}
+};
 
 
 GithubSocialProvider.prototype.saveToLocalStorage_ = function() {
@@ -467,21 +467,22 @@ GithubSocialProvider.prototype.parseHeartbeat_ = function(userId, heartbeats) {
 
   for (var clientId in this.clientStates_) {
     if (this.clientStates_[clientId].userId === userId &&
-        typeof onlineClients[clientId] === 'undefined'
-        && clientId !== this.myClientState_.clientId) {
+        typeof onlineClients[clientId] === 'undefined' &&
+        clientId !== this.myClientState_.clientId) {
       this.addOrUpdateClient_(userId, clientId, 'OFFLINE');
     }
   }
 };
 
 GithubSocialProvider.prototype.isValidMessage_ = function(comment, from) {
+  var message;
   try {
-    var message = JSON.parse(comment.body);
+    message = JSON.parse(comment.body);
   } catch (e) {
     return false;
   }
-  if (typeof message.messageType === 'undefined'
-      || typeof message.clientId === 'undefined') {
+  if (typeof message.messageType === 'undefined' ||
+      typeof message.clientId === 'undefined') {
     console.error('malformed message', message);
     // XXX return false;
     return false;
@@ -505,8 +506,8 @@ GithubSocialProvider.prototype.isValidMessage_ = function(comment, from) {
     }
 
   }
-  if (message.clientId !== this.myClientState_.clientId
-      && message.messageType == MESSAGE_TYPES.STORAGE) {
+  if (message.clientId !== this.myClientState_.clientId &&
+      message.messageType == MESSAGE_TYPES.STORAGE) {
     return false;
   }
 
@@ -539,8 +540,8 @@ GithubSocialProvider.prototype.parseMessages_ = function(messages, from) {
 
 
 GithubSocialProvider.prototype.modifyComment_ = function(commentUrl, body) {
-  if (typeof commentUrl === 'undefined'
-      || commentUrl === '') {
+  if (typeof commentUrl === 'undefined' ||
+      commentUrl === '') {
     return;
   }
   var xhr = freedom["core.xhr"]();
@@ -567,19 +568,24 @@ GithubSocialProvider.prototype.saveToStorage_ = function() {
                        message: this.users_});
 };
 
+GithubSocialProvider.prototype.handleInvite_ = function(from, comment) {
+  this.getUserProfile_(from).then(function(profile) {
+    profile.heartbeat = comment.message.heartbeat;
+    profile.signaling = comment.message.signaling;
+    profile.status = STATUS.INVITED_BY_USER;
+    this.saveToStorage_();
+  }.bind(this));
+};
+
 GithubSocialProvider.prototype.pullMessages_ = function() {
   if (this.myPublicGist_ !== '') {
     this.pullGist_(this.myPublicGist_).then(function(comments) {
       for (var i in comments) {
+        var comment;
         try {
-          var comment = JSON.parse(comments[i].body);
+          comment = JSON.parse(comments[i].body);
           if (comment.messageType === MESSAGE_TYPES.INVITE) {
-            this.getUserProfile_(comments[i].from).then(function(profile) {
-              profile.heartbeat = comment.message.heartbeat;
-              profile.signaling = comment.message.signaling;
-              profile.status = STATUS.INVITED_BY_USER;
-              this.saveToStorage_();
-            }.bind(this));
+            this.handleInvite_(comments[i].from, comment);
           }
         } catch (e) {
           console.error('error parsing ', e);
@@ -618,8 +624,8 @@ GithubSocialProvider.prototype.heartbeat_ = function() {
                         date: Date.now()
                       }});
   for (var user in this.users_) {
-    if (typeof this.users_[user].heartbeat !== 'undefined'
-        && this.users_[user].status === STATUS.FRIEND) {
+    if (typeof this.users_[user].heartbeat !== 'undefined' &&
+        this.users_[user].status === STATUS.FRIEND) {
       var heart = this.users_[user].heartbeat;
       this.pullGist_(heart, user).then(this.parseHeartbeat_.bind(this, user));
     }
@@ -711,7 +717,8 @@ GithubSocialProvider.prototype.addUserProfile_ = function(profile) {
     imageData: profile.imageData || ''
   };
   this.dispatchEvent_('onUserProfile', userProfile);
-  return this.users_[profile.userId] = profile;
+  this.users_[profile.userId] = profile;
+  return profile;
 };
 
 /*
