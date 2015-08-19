@@ -3,12 +3,15 @@
  */
 var PUBLIC_GIST_DESCRIPTION = 'freedom_public';
 var HEARTBEAT_GIST_DESCRIPTION = 'freedom_hearbeat';
+var ETAGS_STORAGE_KEY = 'etags';
+var TIMESTAMPS_STORAGE_KEY = 'timestamps';
 
 var MESSAGE_TYPES = {
   INVITE: 0,
   ACCEPT_INVITE: 1,
   HEARTBEAT: 2,
-  MESSAGE: 3
+  MESSAGE: 3,
+  STORAGE: 4
 };
 
 var STATUS = {
@@ -33,6 +36,9 @@ var GithubSocialProvider = function(dispatchEvent) {
   this.myHeartbeatGist_ = '';
   this.myPublicGist_ = '';
   this.lastSeenTime_ = 0; //Date.now();
+  this.eTags_ = {};
+  this.lastUpdatedTimestamp_ = {};
+  this.storage_ = freedom['core.storage']();
 };
 
 /*
@@ -86,31 +92,31 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
           xhr.on('onload', function() {
             xhr.getResponseText().then(function(text) {
               var user = JSON.parse(text);
-              /// XXX Do I need to fix this?
-              var clientId = Math.random().toString();
-              var clientState = {
-                userId: user.login,
-                clientId: clientId,
-                status: "ONLINE",
-                lastUpdated: Date.now(),
-                lastSeen: Date.now()
-              };
+              this.prepareClientId_().then(function(clientId) {
+                var clientState = {
+                  userId: user.login,
+                  clientId: clientId,
+                  status: "ONLINE",
+                  lastUpdated: Date.now(),
+                  lastSeen: Date.now()
+                };
 
-              this.myClientState_ = clientState;
-              // If the user does not yet have a public uProxy gist, create one.
+                this.myClientState_ = clientState;
+                // If the user does not yet have a public uProxy gist, create one.
 
-              fulfillLogin(clientState);
-              //this.loadContacts_();
+                fulfillLogin(clientState);
+                //this.loadContacts_();
 
-              var profile = {
-                userId: user.login,
-                name: user.name,
-                lastUpdated: Date.now(),
-                url: user.url,
-                imageData: user.avatar_url
-              };
-              this.addUserProfile_(profile);
-              this.finishLogin_();
+                var profile = {
+                  userId: user.login,
+                  name: user.name,
+                  lastUpdated: Date.now(),
+                  url: user.url,
+                  imageData: user.avatar_url
+                };
+                this.addUserProfile_(profile);
+                this.finishLogin_();
+              }.bind(this));
             }.bind(this));
           }.bind(this));
           xhr.send();
@@ -119,6 +125,20 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
       xhr.send();
     }.bind(this));
   }.bind(this));  // end of return new Promise
+};
+
+GithubSocialProvider.prototype.prepareClientId_ = function() {
+  return new Promise(function(fulfill, reject) {
+    this.storage_.get('clientId').then(function(clientId) {
+      if (typeof clientId !== 'undefined' && clientId !== null) {
+        fulfill(clientId);
+      } else {
+        var clientId = Math.random().toString();
+        this.storage_.set('clientId', clientId);
+        fulfill(clientId);
+      }
+    }.bind(this));
+  }.bind(this));
 };
 
 /*
@@ -236,22 +256,39 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
     if (typeof page === 'undefined') {
       page = 1;
     }
+
+    if (typeof this.lastUpdatedTimestamp_[gistId] === 'undefined') {
+      this.lastUpdatedTimestamp_[gistId] = 0;
+    }
+
     var xhr = freedom["core.xhr"]();
     var url = 'https://api.github.com/gists/' + gistId + '/comments?page=' + page
     xhr.open('GET', url, true);
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
-    var date = new Date(this.lastSeenTime_).toGMTString();
-    xhr.setRequestHeader("If-Modified-Since", date); //"Sat, 1 Jan 2005 00:00:00 GMT");
+    if (gistId in this.eTags_) {
+      xhr.setRequestHeader("If-None-Match", this.eTags_[gistId]); //"Sat, 1 Jan 2005 00:00:00 GMT");
+    }
+    xhr.setRequestHeader("If-Modified-Since", "Sat, 1 Jan 2005 00:00:00 GMT");
     xhr.on('onload', function() {
+      xhr.getResponseHeader('ETag').then(function(ETag) {
+        this.eTags_[gistId] = ETag;
+      }.bind(this));
+
       xhr.getStatus().then(function(status) {
-        console.log(status);
+        //console.log(status);
+        if (status === 304) {
+          fulfill([]);
+          return;
+        }
         if (status === 200) {
           xhr.getResponseText().then(function(responseText) {
             var comments = JSON.parse(responseText);
             var new_comments = [];
+            var last_updated = 0;
             for (var i in comments) {
-              if (Date.parse(comments[i].updated_at) > this.lastSeenTime_) {
+              var updated_at = Date.parse(comments[i].updated_at);
+              if (updated_at > this.lastUpdatedTimestamp_[gistId]) {
                 var comment = {
                   from: comments[i].user.login,
                   body: comments[i].body,
@@ -262,6 +299,13 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
                   new_comments.push(comment);
                 }
               }
+
+              if (updated_at > last_updated) {
+                last_updated = updated_at;
+              }
+            }
+            if (last_updated > this.lastUpdatedTimestamp_[gistId]) {
+              this.lastUpdatedTimestamp_[gistId] = last_updated;
             }
             if (comments.length === 30) {
               this.pullGist_(gistId, from, page+1).then(function(other_comments) {
@@ -270,6 +314,7 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
             } else {
               fulfill(new_comments);
             }
+            this.saveToLocalStorage_();
           }.bind(this));
         } else {
           reject();
@@ -303,33 +348,33 @@ GithubSocialProvider.prototype.getUserProfile_ = function(userId) {
 };
 
 GithubSocialProvider.prototype.restoreFromStorage_ = function() {
-  this.createGist_('storage', false).then(function(gistId) {
-    this.pullGist_(gistId, this.myClientState_.userId).then(function(comments) {
-      switch (comments.length) {
-        case 0:
-          this.postComment_(gistId, -1, this.users_).then(function(url) {
-            this.myStorageGist_ = url;
-          }.bind(this));
-          break;
-        case 1:
-          try {
-            var body = JSON.parse(comments[0].body);
-            this.users_ = body.message;
-            this.myStorageGist_ = comments[0].url;
-          } catch (e) {
-            console.error(e);
-          }
-          break;
-        default: console.error("no good");
-      }
+  return new Promise(function(fulfill, reject) {
+    this.createGist_('storage', false).then(function(gistId) {
+      this.pullGist_(gistId, this.myClientState_.userId).then(function(comments) {
+        switch (comments.length) {
+          case 0:
+            this.postComment_(gistId, MESSAGE_TYPES.STORAGE, this.users_).then(function(url) {
+              this.myStorageGist_ = url;
+            }.bind(this));
+            break;
+          case 1:
+            try {
+              var body = JSON.parse(comments[0].body);
+              this.users_ = body.message;
+              this.myStorageGist_ = comments[0].url;
+            } catch (e) {
+              console.error(e);
+            }
+            break;
+          default: console.error("no good");
+        }
+        fulfill();
+      }.bind(this));
     }.bind(this));
   }.bind(this));
 };
 
 GithubSocialProvider.prototype.finishLogin_ = function() {
-  //TODO read from storage
-  // construct this.users_
-  this.restoreFromStorage_();
   this.createGist_(PUBLIC_GIST_DESCRIPTION, true).then(function(gistId) {
     this.myPublicGist_ = gistId;
   }.bind(this));
@@ -356,19 +401,68 @@ GithubSocialProvider.prototype.finishLogin_ = function() {
       console.error(e);
     });
   }.bind(this));
-  this.heartbeatIntervalId_ = setInterval(this.heartbeat_.bind(this), 100); // 10 secs for now
+  this.restoreFromStorage_().then(this.readFromLocalStorage_.bind(this)).then(function() {
+    this.heartbeatIntervalId_ = setInterval(this.heartbeat_.bind(this), 10000); // 10 secs for now
+    this.messagePullingIntervalId_ = setInterval(this.pullMessages_.bind(this), 1000); // 1 sec
+  }.bind(this));
+};
+
+GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
+  var promises = [];
+  promises.push(new Promise(function(fulfill, reject) {
+    this.storage_.get(ETAGS_STORAGE_KEY).then(function(result) {
+      try {
+        this.eTags_ = JSON.parse(result);
+      } catch (e) {
+        this.eTags_ = {};
+      }
+
+      if (result == null) {
+        this.eTags_ = {};
+      }
+      fulfill();
+    }.bind(this))
+  }.bind(this)));
+
+  promises.push(new Promise(function(fulfill, reject) {
+    this.storage_.get(TIMESTAMPS_STORAGE_KEY).then(function(result) {
+      try {
+        this.lastUpdatedTimestamp_ = JSON.parse(result);
+      } catch (e) {
+        this.lastUpdatedTimestamp_ = {};
+      }
+
+      if (result == null) {
+        this.lastUpdatedTimestamp_ = {};
+      }
+      fulfill();
+    }.bind(this))
+  }.bind(this)));
+
+  return Promise.all(promises);
+}
+
+
+GithubSocialProvider.prototype.saveToLocalStorage_ = function() {
+  // Do we need to return promise?
+  this.storage_.set(ETAGS_STORAGE_KEY, JSON.stringify(this.eTags_));
+  this.storage_.set(TIMESTAMPS_STORAGE_KEY, JSON.stringify(this.lastUpdatedTimestamp_));
 };
 
 GithubSocialProvider.prototype.parseHeartbeat_ = function(userId, heartbeats) {
   var onlineClients = {};
   for (var i in heartbeats) {
-    var comment = JSON.parse(heartbeats[i].body);
-    if (comment.messageType !== MESSAGE_TYPES.HEARTBEAT) {
-      console.error('not a heartbeat');
+    try {
+      var comment = JSON.parse(heartbeats[i].body);
+      if (comment.messageType !== MESSAGE_TYPES.HEARTBEAT) {
+        console.error('not a heartbeat');
+        continue;
+      }
+      onlineClients[comment.clientId] = true;
+      this.addOrUpdateClient_(userId, comment.clientId, 'ONLINE');
+    } catch (e) {
       continue;
     }
-    onlineClients[comment.clientId] = true;
-    this.addOrUpdateClient_(userId, comment.clientId, 'ONLINE');
   }
 
   for (var clientId in this.clientStates_) {
@@ -390,7 +484,7 @@ GithubSocialProvider.prototype.isValidMessage_ = function(comment, from) {
       || typeof message.clientId === 'undefined') {
     console.error('malformed message', message);
     // XXX return false;
-    return true;;
+    return false;
   }
 
   if (typeof from !== 'undefined' && from !== comment.from) {
@@ -399,17 +493,21 @@ GithubSocialProvider.prototype.isValidMessage_ = function(comment, from) {
     return false;
   }
 
-  if (message.messageType == MESSAGE_TYPES.message) {
+  if (message.messageType == MESSAGE_TYPES.MESSAGE) {
     // If it's a message on signaling channel
     //
     if (typeof message.toClient === 'undefined') {
       console.error('malformed message', message);
       return false;
     }
-
     if (message.toClient !== this.myClientState_.clientId) {
       return false;
     }
+
+  }
+  if (message.clientId !== this.myClientState_.clientId
+      && message.messageType == MESSAGE_TYPES.STORAGE) {
+    return false;
   }
 
   return true;
@@ -454,7 +552,7 @@ GithubSocialProvider.prototype.modifyComment_ = function(commentUrl, body) {
       //console.log(responseText);
     });
     xhr.getStatus().then(function(status) {
-      console.log(status);
+      //console.log(status);
     });
   });
   xhr.send({string: JSON.stringify({
@@ -463,50 +561,72 @@ GithubSocialProvider.prototype.modifyComment_ = function(commentUrl, body) {
 };
 
 GithubSocialProvider.prototype.saveToStorage_ = function() {
-  this.modifyComment_(this.myStorageGist_, {message: this.users_});
+  this.modifyComment_(this.myStorageGist_,
+                      {clientId: this.myClientState_.clientId,
+                       messageType: MESSAGE_TYPES.STORAGE,
+                       message: this.users_});
+};
+
+GithubSocialProvider.prototype.pullMessages_ = function() {
+  if (this.myPublicGist_ !== '') {
+    this.pullGist_(this.myPublicGist_).then(function(comments) {
+      for (var i in comments) {
+        try {
+          var comment = JSON.parse(comments[i].body);
+          if (comment.messageType === MESSAGE_TYPES.INVITE) {
+            this.getUserProfile_(comments[i].from).then(function(profile) {
+              profile.heartbeat = comment.message.heartbeat;
+              profile.signaling = comment.message.signaling;
+              profile.status = STATUS.INVITED_BY_USER;
+              this.saveToStorage_();
+            }.bind(this));
+          }
+        } catch (e) {
+          console.error('error parsing ', e);
+        }
+
+        this.deleteComment_(comment[i].url);
+      }
+    }.bind(this));
+  }
+
+  for (var user in this.users_) {
+    if (typeof this.users_[user].signaling != 'undefined') {
+      this.pullGist_(this.users_[user].signaling, user).then(this.parseMessages_.bind(this));
+    }
+  }
+};
+
+GithubSocialProvider.prototype.deleteComment_ = function(commentUrl) {
+  var xhr = freedom["core.xhr"]();
+  xhr.open('DELETE', commentUrl, true);
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
+  xhr.on('onload', function() {
+    xhr.getStatus().then(function(status) {
+      //console.log(status);
+    });
+  });
+  xhr.send();
 };
 
 GithubSocialProvider.prototype.heartbeat_ = function() {
-  var currentTime = Date.now();
-  /*
   this.modifyComment_(this.myHeartbeatGist_,
                       {clientId: this.myClientState_.clientId,
                        messageType: MESSAGE_TYPES.HEARTBEAT,
                        message: {
                         date: Date.now()
                       }});
-*/
-  var promises = [];
-  if (this.myPublicGist_ !== '') {
-    promises.push(this.pullGist_(this.myPublicGist_).then(function(comments) {
-      for (var i in comments) {
-        var comment = JSON.parse(comments[i].body);
-        if (comment.messageType === MESSAGE_TYPES.INVITE) {
-          this.getUserProfile_(comments[i].from).then(function(profile) {
-            profile.heartbeat = comment.message.heartbeat;
-            profile.signaling = comment.message.signaling;
-            profile.status = STATUS.INVITED_BY_USER;
-            this.saveToStorage_();
-          }.bind(this));
-        }
-      }
-    }.bind(this)));
-  }
-/*
   for (var user in this.users_) {
     if (typeof this.users_[user].heartbeat !== 'undefined'
         && this.users_[user].status === STATUS.FRIEND) {
       var heart = this.users_[user].heartbeat;
-      promises.push(this.pullGist_(heart, user).then(this.parseHeartbeat_.bind(this, user)));
+      this.pullGist_(heart, user).then(this.parseHeartbeat_.bind(this, user));
     }
     if (typeof this.users_[user].signaling != 'undefined') {
-      promises.push(this.pullGist_(this.users_[user].signaling, user).then(this.parseMessages_.bind(this)));
+      this.pullGist_(this.users_[user].signaling, user).then(this.parseMessages_.bind(this));
     }
   }
-*/
-  Promise.all(promises).then(function() {
-    this.lastSeenTime_ = currentTime;
-  }.bind(this));
 };
 
 GithubSocialProvider.prototype.inviteUser = function(userId) {
@@ -525,9 +645,7 @@ GithubSocialProvider.prototype.inviteUser = function(userId) {
                                   signaling: signalingGist});
       }.bind(this));
     }.bind(this));
-  }.bind(this)).catch(function(e) {
-    console.error('can not invite friend, not a uproxy user');
-  });
+  }.bind(this));
 };
 
 GithubSocialProvider.prototype.acceptUserInvitation = function(userId) {
@@ -576,6 +694,7 @@ GithubSocialProvider.prototype.sendMessage = function(toClientId, message) {
  */
 GithubSocialProvider.prototype.logout = function() {
   clearInterval(this.heartbeatIntervalId_);
+  clearInterval(this.messagePullingIntervalId_);
   return Promise.resolve();
 };
 
