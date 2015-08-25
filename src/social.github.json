@@ -7,7 +7,7 @@
    	]
   },
   "dependencies": {
-    "pgp": {
+    "pgp-e2e": {
       "url": "../freedom-pgp-e2e/pgpapi.json",
       "api": "crypto"
     }
@@ -138,7 +138,7 @@
         "name": "string",
         "url": "string",
         "imageData": "string",
-        "state": "string"
+        "status": "string"
       }},
 
       "onClientState": {"type": "event", "value": {

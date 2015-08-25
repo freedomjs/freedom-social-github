@@ -49,7 +49,7 @@ function arrayBufferToString(buffer) {
     a.push(String.fromCharCode(bytes[i]));
   }
   return a.join('');
-};
+}
 
 function stringToArrayBuffer(s) {
   var buffer = new ArrayBuffer(s.length);
@@ -58,7 +58,7 @@ function stringToArrayBuffer(s) {
     bytes[i] = s.charCodeAt(i);
   }
   return buffer;
-};
+}
 
 /*
  * Initialize this.logger using the module name.
@@ -220,7 +220,7 @@ GithubSocialProvider.prototype.createGist_ = function(description, isPublic, con
 /*
  * Loads contacts of the logged in user, and calls this.addUserProfile_
  * and this.updateUserProfile_ (if needed later, e.g. for async image
- * fetching) for each contact.
+ *'https://api.github.com/gists/' + gistId fetching) for each contact.
  */
 GithubSocialProvider.prototype.loadContacts_ = function() {
   var xhr = new XMLHttpRequest();
@@ -393,13 +393,54 @@ GithubSocialProvider.prototype.restoreFromStorage_ = function() {
   }.bind(this));
 };
 
+GithubSocialProvider.prototype.modifyGistContent_ = function(gistId, content) {
+  var xhr = freedom["core.xhr"]();
+  xhr.open('PATCH', 'https://api.github.com/gists/' + gistId, true);
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
+  xhr.on('onload', function() {
+    xhr.getResponseText().then(function(responseText) {
+      console.log(responseText);
+    });
+    xhr.getStatus().then(function(status) {
+      console.log(status);
+    });
+  });
+  xhr.send({string: JSON.stringify({
+    "description": PUBLIC_GIST_DESCRIPTION, // TODO change it
+    "files": {
+      'file': {
+        //'filename': 'new_file',
+        "content": content
+      }
+    }
+  })});
+
+};
 GithubSocialProvider.prototype.finishLogin_ = function() {
-  this.pgp_ = new freedom['pgp']();
-  this.pgp_.setup('', '<github>').then(() => {
+  this.pgp_ = new freedom['pgp-e2e']();
+  this.pgp_.setup('', '<github>').then(function() {
     this.pgp_.exportKey().then(function(key) {
       this.publicKey_ = key.key;
-      this.createGist_(PUBLIC_GIST_DESCRIPTION, true, key.key).then(function(gistId) {
-        this.myPublicGist_ = gistId;
+      // recovers when app is deleted and reinstalled
+      this.checkForGist_(this.myClientState_.userId, PUBLIC_GIST_DESCRIPTION).then(function(gistId) {
+        var myClientId = this.myClientState_.clientId;
+        if (gistId !== '') {
+          this.myPublicGist_ = gistId;
+          this.getContent_(gistId).then(function(keys) {
+            if (myClientId in keys || keys[myClientId] !== this.publicKey_) {
+              keys[myClientId] = this.publicKey_;
+              this.modifyGistContent_(gistId, JSON.stringify(keys));
+            }
+          }.bind(this));
+        } else {
+          var keys = {};
+          keys[myClientId] = this.publicKey_;
+          var content = JSON.stringify(keys);
+          this.createGist_(PUBLIC_GIST_DESCRIPTION, true, content).then(function(gistId) {
+            this.myPublicGist_ = gistId;
+          }.bind(this));
+        }
       }.bind(this));
     }.bind(this));
   }.bind(this));
@@ -573,7 +614,7 @@ GithubSocialProvider.prototype.parseMessages_ = function(messages, from) {
 
     if (comment.messageType === MESSAGE_TYPES.ACCEPT_INVITE) {
       this.users_[messages[i].from].heartbeat = comment.message.heartbeat;
-      this.users_[messages[i].from].status = STATUS.FRIEND;
+      this.updateUserStatus_(messages[i].from, STATUS.FRIEND);
       this.saveToStorage_();
       /// XXX raise an event
       continue;
@@ -625,20 +666,21 @@ GithubSocialProvider.prototype.saveToStorage_ = function() {
 };
 
 GithubSocialProvider.prototype.handleInvite_ = function(from, comment) {
-  this.getUserProfile_(from).then(function(profile) {
-    this.checkForGist_(userId, PUBLIC_GIST_DESCRIPTION).then(function(friendGist) {
+  return this.getUserProfile_(from).then(function(profile) {
+    return this.checkForGist_(from, PUBLIC_GIST_DESCRIPTION).then(function(friendGist) {
       return this.getContent_(friendGist);
-    }.bind(this)).then(function(key) {
-      this.pgp_.dearmor(comment.message).then(function(cipherData) {
+    }.bind(this)).then(function(keys) {
+      var key = keys[comment.clientId];
+      return this.pgp_.dearmor(comment.message).then(function(cipherData) {
         return this.pgp_.verifyDecrypt(cipherData, key);
       }.bind(this)).then(function(result) {
         var message = JSON.parse(arrayBufferToString(result.data));
         profile.heartbeat = message.heartbeat;
         profile.signaling = message.signaling;
-        profile.status = STATUS.INVITED_BY_USER;
+        this.updateUserStatus_(from, STATUS.INVITED_BY_USER);
         this.saveToStorage_();
       }.bind(this));
-    });
+    }.bind(this));
   }.bind(this));
 };
 
@@ -708,13 +750,27 @@ GithubSocialProvider.prototype.getContent_ = function(gistId) {
     xhr.on('onload', function() {
       xhr.getResponseText().then(function(text) {
         var gist = JSON.parse(text);
-        fulfill(gist.files.file.content);
+        fulfill(JSON.parse(gist.files.file.content));
         //console.log(status);
       });
     });
     xhr.send();
   }.bind(this));
-}
+};
+
+GithubSocialProvider.prototype.encryptAndPost_ = function(gistId, message, key, clientId) {
+  var arrayBuf = stringToArrayBuffer(JSON.stringify(message));
+  return this.pgp_.signEncrypt(arrayBuf, key).then(function(cipherData) {
+    return this.pgp_.armor(cipherData);
+  }.bind(this)).then(function(cipherText) {
+    return this.postComment_(gistId,
+                             MESSAGE_TYPES.INVITE,
+                             cipherText,
+                             clientId);
+  }.bind(this)).catch(function(e) {
+    console.error(e);
+  });
+};
 
 GithubSocialProvider.prototype.inviteUser = function(userId) {
   return this.checkForGist_(userId, PUBLIC_GIST_DESCRIPTION).then(function(friendGist) {
@@ -723,27 +779,22 @@ GithubSocialProvider.prototype.inviteUser = function(userId) {
     }
     return this.createGist_('signaling:' + userId, false, "signaling").then(function(signalingGist) {
       return this.getUserProfile_(userId).then(function(profile) {
-        profile.status = STATUS.USER_INVITED;
+        this.updateUserStatus_(userId, STATUS.USER_INVITED);
         profile.signaling = signalingGist;
         this.saveToStorage_();
-        return this.getContent_(friendGist).then(function(key) {
-          var message = {
-            heartbeat :this.heartbeatGist_,
-            signaling: signalingGist
-          };
+        return this.getContent_(friendGist).then(function(keys) {
+          var promises = [];
+          for (var clientId in keys) {
+            var message = {
+              heartbeat :this.heartbeatGist_,
+              signaling: signalingGist
+            };
 
-          var str = JSON.stringify(message);
+            var key = keys[clientId];
+            promises.push(this.encryptAndPost_(friendGist, message, key, clientId));
+          }
 
-          var arrayBuf = stringToArrayBuffer(str);
-          return this.pgp_.signEncrypt(arrayBuf, key).then(function(cipherData) {
-            return this.pgp_.armor(cipherData);
-          }.bind(this)).then(function(cipherText) {
-            return this.postComment_(friendGist,
-                                     MESSAGE_TYPES.INVITE,
-                                     cipherText);
-          }.bind(this)).catch(function(e) {
-            console.error(e);
-          });
+          return Promise.all(promises);
         }.bind(this));
       }.bind(this));
     }.bind(this));
@@ -755,7 +806,7 @@ GithubSocialProvider.prototype.acceptUserInvitation = function(userId) {
   if (typeof signalingGist === 'undefined') {
     return Promise.reject('No invite from this user');
   }
-  this.users_[userId].status = STATUS.FRIEND;
+  this.updateUserStatus_(userId, STATUS.FRIEND);
   this.saveToStorage_();
 
   return this.postComment_(signalingGist,
@@ -815,6 +866,20 @@ GithubSocialProvider.prototype.addUserProfile_ = function(profile) {
   this.dispatchEvent_('onUserProfile', userProfile);
   this.users_[profile.userId] = profile;
   return profile;
+};
+
+GithubSocialProvider.prototype.updateUserStatus_ = function(userId, status) {
+  profile = this.users_[userId];
+  profile.status = status;
+  var userProfile = {
+    userId: profile.userId,
+    name: profile.name || profile.userId || '',
+    lastUpdated: Date.now(),
+    url: profile.url || '',
+    imageData: profile.imageData || '',
+    status: profile.status
+  };
+  this.dispatchEvent_('onUserProfile', userProfile);
 };
 
 /*
