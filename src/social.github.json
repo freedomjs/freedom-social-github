@@ -138,7 +138,7 @@
         "name": "string",
         "url": "string",
         "imageData": "string",
-        "status": "string"
+        "status": "number"
       }},
 
       "onClientState": {"type": "event", "value": {
