@@ -130,7 +130,7 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
                   userId: user.login,
                   name: user.name,
                   lastUpdated: Date.now(),
-                  url: user.url,
+                  url: user.html_url,
                   imageData: user.avatar_url
                 };
                 this.addUserProfile_(profile);
@@ -356,7 +356,7 @@ GithubSocialProvider.prototype.getUserProfile_ = function(userId) {
           userId: user.login,
           name: user.nameGist,
           lastUpdated: Date.now(),
-          url: user.url,
+          url: user.html_url,
           imageData: user.avatar_url,
         };
         fulfill(this.addUserProfile_(profile));
