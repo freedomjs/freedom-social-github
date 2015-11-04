@@ -6,6 +6,7 @@ var HEARTBEAT_GIST_DESCRIPTION = 'freedom_hearbeat';
 var ETAGS_STORAGE_KEY = 'etags';
 var TIMESTAMPS_STORAGE_KEY = 'timestamps';
 
+
 var MESSAGE_TYPES = {
   INVITE: 0,
   ACCEPT_INVITE: 1,
@@ -626,6 +627,8 @@ GithubSocialProvider.prototype.parseMessages_ = function(messages, from) {
       lastUpdated: Date.now(),
       lastSeen: Date.now()
     };
+
+    this.addOrUpdateClient_(messages[i].from, comment.clientId, 'ONLINE');
 
     this.handleMessage_(clientState, comment.message);
   }
