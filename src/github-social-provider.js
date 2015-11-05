@@ -6,7 +6,6 @@ var HEARTBEAT_GIST_DESCRIPTION = 'freedom_hearbeat';
 var ETAGS_STORAGE_KEY = 'etags';
 var TIMESTAMPS_STORAGE_KEY = 'timestamps';
 
-
 var MESSAGE_TYPES = {
   INVITE: 0,
   ACCEPT_INVITE: 1,
@@ -737,8 +736,6 @@ GithubSocialProvider.prototype.heartbeat_ = function() {
       var heart = this.users_[user].heartbeat;
       this.pullGist_(heart, user).then(this.parseHeartbeat_.bind(this, user));
     }
-
-
   }
 };
 GithubSocialProvider.prototype.getContent_ = function(gistId) {
