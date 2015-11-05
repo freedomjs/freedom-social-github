@@ -190,7 +190,6 @@ GithubSocialProvider.prototype.createGist_ = function(description, isPublic, con
   return this.checkForGist_(this.myClientState_.userId, description)
     .then(function(gistId) {
       if (gistId === '') {
-        console.log('trying to post new gist');
         var xhr = new XMLHttpRequest();
         var url = 'https://api.github.com/gists';
         xhr.open('POST', url);
@@ -401,10 +400,10 @@ GithubSocialProvider.prototype.modifyGistContent_ = function(gistId, content) {
   xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
   xhr.on('onload', function() {
     xhr.getResponseText().then(function(responseText) {
-      console.log(responseText);
+      //console.log(responseText);
     });
     xhr.getStatus().then(function(status) {
-      console.log(status);
+      //console.log(status);
     });
   });
   xhr.send({string: JSON.stringify({
@@ -706,7 +705,7 @@ GithubSocialProvider.prototype.pullMessages_ = function() {
   }
 
   for (var user in this.users_) {
-    if (typeof this.users_[user].signaling != 'undefined') {
+    if (typeof this.users_[user].signaling !== 'undefined') {
       this.pullGist_(this.users_[user].signaling, user).then(this.parseMessages_.bind(this));
     }
   }
@@ -738,9 +737,8 @@ GithubSocialProvider.prototype.heartbeat_ = function() {
       var heart = this.users_[user].heartbeat;
       this.pullGist_(heart, user).then(this.parseHeartbeat_.bind(this, user));
     }
-    if (typeof this.users_[user].signaling != 'undefined') {
-      this.pullGist_(this.users_[user].signaling, user).then(this.parseMessages_.bind(this));
-    }
+
+
   }
 };
 GithubSocialProvider.prototype.getContent_ = function(gistId) {
@@ -833,15 +831,15 @@ GithubSocialProvider.prototype.getUsers = function() {
  * Sends a message to another clientId.
  */
 GithubSocialProvider.prototype.sendMessage = function(toClientId, message) {
-  /*
   if (this.clientStates_[toClientId].status !== 'ONLINE') {
     return Promise.reject('Client not online');
   }
-  */
 
   var userId = this.clientStates_[toClientId].userId;
   var signalingGist = this.users_[userId].signaling;
-  return this.postComment_(signalingGist, MESSAGE_TYPES.MESSAGE, message, toClientId);
+  return this.postComment_(signalingGist, MESSAGE_TYPES.MESSAGE, message, toClientId).then(function() {
+    return Promise.resolve();
+  });
 };
 
 /*
