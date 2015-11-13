@@ -445,7 +445,7 @@ GithubSocialProvider.prototype.finishLogin_ = function() {
   }.bind(this));
   this.createGist_(HEARTBEAT_GIST_DESCRIPTION, false, "heartbeat").then(function(gistId) {
     this.heartbeatGist_ = gistId;
-    this.pullGist_(gistId, this.myClientState_.userId).then(function(heartbeats) {
+    this.pullGist_(gistId, this.myClientState_.userId, false).then(function(heartbeats) {
       for (var i in heartbeats) {
         var comment = JSON.parse(heartbeats[i].body);
         if(comment.messageType === MESSAGE_TYPES.HEARTBEAT &&
@@ -598,7 +598,8 @@ GithubSocialProvider.prototype.isValidMessage_ = function(comment, from) {
   // your friends heartbeats between last time you check it
   // and now but it shouldn't count because it's old.
   if (message.messageType == MESSAGE_TYPES.HEARTBEAT) {
-    if (message.message.date < Date.now() - 20000) {
+    var date = JSON.parse(message.message);
+    if (date.date < Date.now() - 20000) {
       return false;
     }
   }
