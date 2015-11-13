@@ -834,9 +834,8 @@ GithubSocialProvider.prototype.sendMessage = function(toClientId, message) {
 
   var userId = this.clientStates_[toClientId].userId;
   var signalingGist = this.users_[userId].signaling;
-  return this.postComment_(signalingGist, MESSAGE_TYPES.MESSAGE, message, toClientId).then(function() {
-    return Promise.resolve();
-  });
+  return this.postComment_(signalingGist, MESSAGE_TYPES.MESSAGE, message, toClientId)
+      .then( Promise.resolve();
 };
 
 /*
