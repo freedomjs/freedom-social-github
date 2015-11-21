@@ -40,6 +40,8 @@ var GithubSocialProvider = function(dispatchEvent) {
   this.lastUpdatedTimestamp_ = {};
   this.storage_ = freedom['core.storage']();
   this.readFromLocalstorage_ = false;
+  this.lastPage_ = {};
+  this.lastHeartbeatTimestamp_ = 0;
 };
 
 function arrayBufferToString(buffer) {
@@ -272,7 +274,16 @@ GithubSocialProvider.prototype.postComment_ = function(gistId, messageType, comm
 GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
   return new Promise(function(fulfill, reject) {
     if (typeof page === 'undefined') {
-      page = 1;
+      if (gistId in this.lastPage_) {
+        page = this.lastPage_[gistId];
+      } else {
+        this.lastPage_[gistId] = 1;
+        page = 1;
+      }
+    }
+
+    if (page > this.lastPage_[gistId]) {
+      this.lastPage_[gistId] = page;
     }
 
     if (typeof this.lastUpdatedTimestamp_[gistId] === 'undefined') {
@@ -284,59 +295,65 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
     xhr.open('GET', url, true);
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
-    if (gistId in this.eTags_) {
-      xhr.setRequestHeader("If-None-Match", this.eTags_[gistId]); //"Sat, 1 Jan 2005 00:00:00 GMT");
+    if (url in this.eTags_) {
+      xhr.setRequestHeader("If-None-Match", this.eTags_[url]); //"Sat, 1 Jan 2005 00:00:00 GMT");
     }
     xhr.setRequestHeader("If-Modified-Since", "Sat, 1 Jan 2005 00:00:00 GMT");
     xhr.on('onload', function() {
       xhr.getResponseHeader('ETag').then(function(ETag) {
-        this.eTags_[gistId] = ETag;
+        this.eTags_[url] = ETag;
       }.bind(this));
 
-      xhr.getStatus().then(function(status) {
-        //console.log(status);
-        if (status === 304) {
-          fulfill([]);
-          return;
-        }
-        if (status === 200) {
-          xhr.getResponseText().then(function(responseText) {
-            var comments = JSON.parse(responseText);
-            var new_comments = [];
-            var last_updated = 0;
-            for (var i in comments) {
-              var updated_at = Date.parse(comments[i].updated_at);
-              if (updated_at > this.lastUpdatedTimestamp_[gistId]) {
-                var comment = {
-                  from: comments[i].user.login,
-                  body: comments[i].body,
-                  url: comments[i].url
-                };
+      xhr.getResponseHeader('Link').then(function(link) {
+        xhr.getStatus().then(function(status) {
+          if (status === 304) {
+            if (gistId === "bd064eebc6c5f6d72657" && page < 7) {
+              xhr.getAllResponseHeaders().then(function(a) {
+                console.log(url, a);
+              });
+            }
+            fulfill([]);
+            return;
+          }
+          if (status === 200) {
+            xhr.getResponseText().then(function(responseText) {
+              var comments = JSON.parse(responseText);
+              var new_comments = [];
+              var last_updated = 0;
+              for (var i in comments) {
+                var updated_at = Date.parse(comments[i].updated_at);
+                if (updated_at > this.lastUpdatedTimestamp_[gistId]) {
+                  var comment = {
+                    from: comments[i].user.login,
+                    body: comments[i].body,
+                    url: comments[i].url
+                  };
 
-                if (this.isValidMessage_(comment, from)) {
-                  new_comments.push(comment);
+                  if (this.isValidMessage_(comment, from)) {
+                    new_comments.push(comment);
+                  }
+                }
+
+                if (updated_at > last_updated) {
+                  last_updated = updated_at;
                 }
               }
-
-              if (updated_at > last_updated) {
-                last_updated = updated_at;
+              if (last_updated > this.lastUpdatedTimestamp_[gistId]) {
+                this.lastUpdatedTimestamp_[gistId] = last_updated;
               }
-            }
-            if (last_updated > this.lastUpdatedTimestamp_[gistId]) {
-              this.lastUpdatedTimestamp_[gistId] = last_updated;
-            }
-            if (comments.length === 30) {
-              this.pullGist_(gistId, from, page+1).then(function(other_comments) {
-                fulfill(new_comments.concat(other_comments));
-              });
-            } else {
-              fulfill(new_comments);
-            }
-            this.saveToLocalStorage_();
-          }.bind(this));
-        } else {
-          reject();
-        }
+              if (comments.length === 30) {
+                this.pullGist_(gistId, from, page+1).then(function(other_comments) {
+                  fulfill(new_comments.concat(other_comments));
+                });
+              } else {
+                fulfill(new_comments);
+              }
+              this.saveToLocalStorage_();
+            }.bind(this));
+          } else {
+            reject();
+          }
+        }.bind(this));
       }.bind(this));
     }.bind(this));
     xhr.send();
@@ -445,7 +462,7 @@ GithubSocialProvider.prototype.finishLogin_ = function() {
   }.bind(this));
   this.createGist_(HEARTBEAT_GIST_DESCRIPTION, false, "heartbeat").then(function(gistId) {
     this.heartbeatGist_ = gistId;
-    this.pullGist_(gistId, this.myClientState_.userId, false).then(function(heartbeats) {
+    this.pullGist_(gistId, this.myClientState_.userId).then(function(heartbeats) {
       for (var i in heartbeats) {
         var comment = JSON.parse(heartbeats[i].body);
         if(comment.messageType === MESSAGE_TYPES.HEARTBEAT &&
@@ -478,7 +495,7 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
   promises.push(new Promise(function(fulfill, reject) {
     this.storage_.get(ETAGS_STORAGE_KEY).then(function(result) {
       try {
-        this.eTags_ = JSON.parse(result);
+        //this.eTags_ = JSON.parse(result);
       } catch (e) {
         this.eTags_ = {};
       }
@@ -598,8 +615,7 @@ GithubSocialProvider.prototype.isValidMessage_ = function(comment, from) {
   // your friends heartbeats between last time you check it
   // and now but it shouldn't count because it's old.
   if (message.messageType == MESSAGE_TYPES.HEARTBEAT) {
-    var date = JSON.parse(message.message);
-    if (date.date < Date.now() - 20000) {
+    if (message.message.date < Date.now() - 20000) {
       return false;
     }
   }
@@ -635,25 +651,29 @@ GithubSocialProvider.prototype.parseMessages_ = function(messages, from) {
 
 
 GithubSocialProvider.prototype.modifyComment_ = function(commentUrl, body) {
-  if (typeof commentUrl === 'undefined' ||
-      commentUrl === '') {
-    return;
-  }
-  var xhr = freedom["core.xhr"]();
-  xhr.open('PATCH', commentUrl, true);
-  xhr.setRequestHeader('Content-Type', 'application/json');
-  xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
-  xhr.on('onload', function() {
-    xhr.getResponseText().then(function(responseText) {
-      //console.log(responseText);
+  return new Promise(function(fulfill, reject) {
+    if (typeof commentUrl === 'undefined' ||
+        commentUrl === '') {
+      return;
+    }
+    var xhr = freedom["core.xhr"]();
+    xhr.open('PATCH', commentUrl, true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
+    xhr.on('onload', function() {
+      xhr.getStatus().then(function(status) {
+        if (status === 200) {
+          fulfill()
+        } else {
+          reject();
+        }
+        //console.log(status);
+      });
     });
-    xhr.getStatus().then(function(status) {
-      //console.log(status);
-    });
-  });
-  xhr.send({string: JSON.stringify({
-    "body": JSON.stringify(body)
-  })});
+    xhr.send({string: JSON.stringify({
+      "body": JSON.stringify(body)
+    })});
+  }.bind(this));
 };
 
 GithubSocialProvider.prototype.saveToStorage_ = function() {
@@ -725,12 +745,23 @@ GithubSocialProvider.prototype.deleteComment_ = function(commentUrl) {
 };
 
 GithubSocialProvider.prototype.heartbeat_ = function() {
+  setTimeout(function() {
+    if (Date.now() - this.lastHeartbeatTimestamp_ > 60000) {
+      this.addOrUpdateClient_(
+          this.myClientState_.userId,
+          this.myClientState_.clientId,
+          'OFFLINE');
+    }
+  }.bind(this), 60000);
   this.modifyComment_(this.myHeartbeatGist_,
                       {clientId: this.myClientState_.clientId,
                        messageType: MESSAGE_TYPES.HEARTBEAT,
                        message: {
                         date: Date.now()
-                      }});
+                      }})
+      .then(function(e) {
+        this.lastHeartbeatTimestamp_ = Date.now();
+      });
   for (var user in this.users_) {
     if (typeof this.users_[user].heartbeat !== 'undefined' &&
         this.users_[user].status === STATUS.FRIEND) {
@@ -836,7 +867,9 @@ GithubSocialProvider.prototype.sendMessage = function(toClientId, message) {
   var userId = this.clientStates_[toClientId].userId;
   var signalingGist = this.users_[userId].signaling;
   return this.postComment_(signalingGist, MESSAGE_TYPES.MESSAGE, message, toClientId)
-      .then( Promise.resolve();
+      .then(function() {
+    return Promise.resolve()
+  });
 };
 
 /*
