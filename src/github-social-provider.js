@@ -307,11 +307,6 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
       xhr.getResponseHeader('Link').then(function(link) {
         xhr.getStatus().then(function(status) {
           if (status === 304) {
-            if (gistId === "bd064eebc6c5f6d72657" && page < 7) {
-              xhr.getAllResponseHeaders().then(function(a) {
-                console.log(url, a);
-              });
-            }
             fulfill([]);
             return;
           }
@@ -462,6 +457,14 @@ GithubSocialProvider.prototype.finishLogin_ = function() {
   }.bind(this));
   this.createGist_(HEARTBEAT_GIST_DESCRIPTION, false, "heartbeat").then(function(gistId) {
     this.heartbeatGist_ = gistId;
+    this.createGist_('signaling:' + this.myClientState_.userId, false, "signaling")
+        .then(function(signalingGist) {
+      this.getUserProfile_(this.myClientState_.userId).then(function(profile) {
+          this.updateUserStatus_(this.myClientState_.userId, STATUS.FRIEND);
+          profile.heartbeat = this.heartbeatGist_;
+          profile.signaling = signalingGist;
+      }.bind(this));
+    }.bind(this));
     this.pullGist_(gistId, this.myClientState_.userId).then(function(heartbeats) {
       for (var i in heartbeats) {
         var comment = JSON.parse(heartbeats[i].body);
@@ -479,15 +482,16 @@ GithubSocialProvider.prototype.finishLogin_ = function() {
             this.myHeartbeatGist_ = gistUrl;
         }.bind(this));
       }
+      this.readFromLocalStorage_().then(function() {
+        this.heartbeat_(); /// XXX this is a hack
+        this.heartbeatIntervalId_ = setInterval(this.heartbeat_.bind(this), 10000); // 10 secs for now
+        this.messagePullingIntervalId_ = setInterval(this.pullMessages_.bind(this), 1000); // 1 sec
+      }.bind(this));
     }.bind(this)).catch(function(E) {
       console.error(e);
     });
   }.bind(this));
-  this.readFromLocalStorage_().then(function() {
-    this.heartbeat_(); /// XXX this is a hack
-    this.heartbeatIntervalId_ = setInterval(this.heartbeat_.bind(this), 10000); // 10 secs for now
-    this.messagePullingIntervalId_ = setInterval(this.pullMessages_.bind(this), 1000); // 1 sec
-  }.bind(this));
+
 };
 
 GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
@@ -687,15 +691,15 @@ GithubSocialProvider.prototype.saveToStorage_ = function() {
 };
 
 GithubSocialProvider.prototype.handleInvite_ = function(from, comment) {
-  return this.getUserProfile_(from).then(function(profile) {
-    return this.checkForGist_(from, PUBLIC_GIST_DESCRIPTION).then(function(friendGist) {
-      return this.getContent_(friendGist);
-    }.bind(this)).then(function(keys) {
-      var key = keys[comment.clientId];
-      return this.pgp_.dearmor(comment.message).then(function(cipherData) {
-        return this.pgp_.verifyDecrypt(cipherData, key);
-      }.bind(this)).then(function(result) {
-        var message = JSON.parse(arrayBufferToString(result.data));
+  return this.checkForGist_(from, PUBLIC_GIST_DESCRIPTION).then(function(friendGist) {
+    return this.getContent_(friendGist);
+  }.bind(this)).then(function(keys) {
+    var key = keys[comment.clientId];
+    return this.pgp_.dearmor(comment.message).then(function(cipherData) {
+      return this.pgp_.verifyDecrypt(cipherData, key);
+    }.bind(this)).then(function(result) {
+      var message = JSON.parse(arrayBufferToString(result.data));
+      return this.getUserProfile_(from).then(function(profile) {
         profile.heartbeat = message.heartbeat;
         profile.signaling = message.signaling;
         this.updateUserStatus_(from, STATUS.INVITED_BY_USER);
@@ -761,7 +765,7 @@ GithubSocialProvider.prototype.heartbeat_ = function() {
                       }})
       .then(function(e) {
         this.lastHeartbeatTimestamp_ = Date.now();
-      });
+      }.bind(this));
   for (var user in this.users_) {
     if (typeof this.users_[user].heartbeat !== 'undefined' &&
         this.users_[user].status === STATUS.FRIEND) {
