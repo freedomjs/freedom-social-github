@@ -3,8 +3,9 @@
  */
 var PUBLIC_GIST_DESCRIPTION = 'freedom_public';
 var HEARTBEAT_GIST_DESCRIPTION = 'freedom_hearbeat';
-var ETAGS_STORAGE_KEY = 'etags';
-var TIMESTAMPS_STORAGE_KEY = 'timestamps';
+var ETAGS_STORAGE_KEY = '_etags';
+var CLIENT_ID =  '_client_id'
+var TIMESTAMPS_STORAGE_KEY = '_timestamps';
 
 var MESSAGE_TYPES = {
   INVITE: 0,
@@ -39,7 +40,6 @@ var GithubSocialProvider = function(dispatchEvent) {
   this.eTags_ = {};
   this.lastUpdatedTimestamp_ = {};
   this.storage_ = freedom['core.storage']();
-  this.readFromLocalstorage_ = false;
   this.lastPage_ = {};
   this.lastHeartbeatTimestamp_ = 0;
 };
@@ -113,7 +113,7 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
           xhr.on('onload', function() {
             xhr.getResponseText().then(function(text) {
               var user = JSON.parse(text);
-              this.prepareClientId_().then(function(clientId) {
+              this.prepareClientId_(user.login).then(function(clientId) {
                 var clientState = {
                   userId: user.login,
                   clientId: clientId,
@@ -148,14 +148,14 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
   }.bind(this));  // end of return new Promise
 };
 
-GithubSocialProvider.prototype.prepareClientId_ = function() {
+GithubSocialProvider.prototype.prepareClientId_ = function(userId) {
   return new Promise(function(fulfill, reject) {
-    this.storage_.get('clientId').then(function(clientId) {
+    this.storage_.get(userId + CLIENT_ID).then(function(clientId) {
       if (typeof clientId !== 'undefined' && clientId !== null) {
         fulfill(clientId);
       } else {
         clientId = Math.random().toString();
-        this.storage_.set('clientId', clientId);
+        this.storage_.set(userId + CLIENT_ID, clientId);
         fulfill(clientId);
       }
     }.bind(this));
@@ -390,6 +390,10 @@ GithubSocialProvider.prototype.restoreFromStorage_ = function() {
           case 1:
             try {
               var body = JSON.parse(comments[0].body);
+              for (userId in body.message) {
+                this.users_[userId] = body.message[userId];
+                this.updateUserStatus_(userId, body.message[userId].status);
+              }
               this.users_ = body.message;
               this.myStorageGist_ = comments[0].url;
             } catch (e) {
@@ -482,12 +486,12 @@ GithubSocialProvider.prototype.finishLogin_ = function() {
             this.myHeartbeatGist_ = gistUrl;
         }.bind(this));
       }
-      this.readFromLocalStorage_().then(function() {
+      this.restoreFromStorage_().then(this.readFromLocalStorage_.bind(this)).then(function() {
         this.heartbeat_(); /// XXX this is a hack
         this.heartbeatIntervalId_ = setInterval(this.heartbeat_.bind(this), 10000); // 10 secs for now
         this.messagePullingIntervalId_ = setInterval(this.pullMessages_.bind(this), 1000); // 1 sec
       }.bind(this));
-    }.bind(this)).catch(function(E) {
+    }.bind(this)).catch(function(e) {
       console.error(e);
     });
   }.bind(this));
@@ -496,9 +500,13 @@ GithubSocialProvider.prototype.finishLogin_ = function() {
 
 GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
   var promises = [];
+  var userId = this.myClientState_.userId;
   promises.push(new Promise(function(fulfill, reject) {
-    this.storage_.get(ETAGS_STORAGE_KEY).then(function(result) {
+    this.storage_.get(userId + ETAGS_STORAGE_KEY).then(function(result) {
       try {
+        //TODO uncomment this but we need to store
+        //last page if we do this.
+        //Is it worth it?
         //this.eTags_ = JSON.parse(result);
       } catch (e) {
         this.eTags_ = {};
@@ -512,7 +520,7 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
   }.bind(this)));
 
   promises.push(new Promise(function(fulfill, reject) {
-    this.storage_.get(TIMESTAMPS_STORAGE_KEY).then(function(result) {
+    this.storage_.get(userId + TIMESTAMPS_STORAGE_KEY).then(function(result) {
       try {
         this.lastUpdatedTimestamp_ = JSON.parse(result);
       } catch (e) {
@@ -525,7 +533,7 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
       fulfill();
     }.bind(this));
   }.bind(this)));
-
+  /*
   promises.push(new Promise(function(fulfill, reject) {
     this.storage_.get('users').then(function(result) {
       try {
@@ -540,6 +548,7 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
       fulfill();
     }.bind(this));
   }.bind(this)));
+  */
 
 
   return Promise.all(promises);
@@ -548,8 +557,9 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
 
 GithubSocialProvider.prototype.saveToLocalStorage_ = function() {
   // Do we need to return promise?
-  this.storage_.set(ETAGS_STORAGE_KEY, JSON.stringify(this.eTags_));
-  this.storage_.set(TIMESTAMPS_STORAGE_KEY, JSON.stringify(this.lastUpdatedTimestamp_));
+  var userId = this.clientState_.userId;
+  this.storage_.set(userId + ETAGS_STORAGE_KEY, JSON.stringify(this.eTags_));
+  this.storage_.set(userId + TIMESTAMPS_STORAGE_KEY, JSON.stringify(this.lastUpdatedTimestamp_));
 };
 
 GithubSocialProvider.prototype.parseHeartbeat_ = function(userId, heartbeats) {
@@ -611,7 +621,7 @@ GithubSocialProvider.prototype.isValidMessage_ = function(comment, from) {
   }
   if (message.clientId !== this.myClientState_.clientId &&
       message.messageType == MESSAGE_TYPES.STORAGE) {
-    return false;
+    //return false;
   }
 
   // Discard old heartbeats.
@@ -681,13 +691,11 @@ GithubSocialProvider.prototype.modifyComment_ = function(commentUrl, body) {
 };
 
 GithubSocialProvider.prototype.saveToStorage_ = function() {
-  this.storage_.set('users', JSON.stringify(this.users_));
-  /*
+  //this.storage_.set('users', JSON.stringify(this.users_));
   this.modifyComment_(this.myStorageGist_,
                       {clientId: this.myClientState_.clientId,
                        messageType: MESSAGE_TYPES.STORAGE,
                        message: this.users_});
-  */
 };
 
 GithubSocialProvider.prototype.handleInvite_ = function(from, comment) {
