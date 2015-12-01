@@ -3,8 +3,9 @@
  */
 var PUBLIC_GIST_DESCRIPTION = 'freedom_public';
 var HEARTBEAT_GIST_DESCRIPTION = 'freedom_hearbeat';
-var ETAGS_STORAGE_KEY = 'etags';
-var TIMESTAMPS_STORAGE_KEY = 'timestamps';
+var ETAGS_STORAGE_KEY = '_etags';
+var CLIENT_ID =  '_client_id'
+var TIMESTAMPS_STORAGE_KEY = '_timestamps';
 
 var MESSAGE_TYPES = {
   INVITE: 0,
@@ -39,7 +40,8 @@ var GithubSocialProvider = function(dispatchEvent) {
   this.eTags_ = {};
   this.lastUpdatedTimestamp_ = {};
   this.storage_ = freedom['core.storage']();
-  this.readFromLocalstorage_ = false;
+  this.lastPage_ = {};
+  this.lastHeartbeatTimestamp_ = 0;
 };
 
 function arrayBufferToString(buffer) {
@@ -111,7 +113,7 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
           xhr.on('onload', function() {
             xhr.getResponseText().then(function(text) {
               var user = JSON.parse(text);
-              this.prepareClientId_().then(function(clientId) {
+              this.prepareClientId_(user.login).then(function(clientId) {
                 var clientState = {
                   userId: user.login,
                   clientId: clientId,
@@ -146,14 +148,14 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
   }.bind(this));  // end of return new Promise
 };
 
-GithubSocialProvider.prototype.prepareClientId_ = function() {
+GithubSocialProvider.prototype.prepareClientId_ = function(userId) {
   return new Promise(function(fulfill, reject) {
-    this.storage_.get('clientId').then(function(clientId) {
+    this.storage_.get(userId + CLIENT_ID).then(function(clientId) {
       if (typeof clientId !== 'undefined' && clientId !== null) {
         fulfill(clientId);
       } else {
         clientId = Math.random().toString();
-        this.storage_.set('clientId', clientId);
+        this.storage_.set(userId + CLIENT_ID, clientId);
         fulfill(clientId);
       }
     }.bind(this));
@@ -189,7 +191,6 @@ GithubSocialProvider.prototype.createGist_ = function(description, isPublic, con
   return this.checkForGist_(this.myClientState_.userId, description)
     .then(function(gistId) {
       if (gistId === '') {
-        console.log('trying to post new gist');
         var xhr = new XMLHttpRequest();
         var url = 'https://api.github.com/gists';
         xhr.open('POST', url);
@@ -273,7 +274,16 @@ GithubSocialProvider.prototype.postComment_ = function(gistId, messageType, comm
 GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
   return new Promise(function(fulfill, reject) {
     if (typeof page === 'undefined') {
-      page = 1;
+      if (gistId in this.lastPage_) {
+        page = this.lastPage_[gistId];
+      } else {
+        this.lastPage_[gistId] = 1;
+        page = 1;
+      }
+    }
+
+    if (page > this.lastPage_[gistId]) {
+      this.lastPage_[gistId] = page;
     }
 
     if (typeof this.lastUpdatedTimestamp_[gistId] === 'undefined') {
@@ -285,59 +295,60 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
     xhr.open('GET', url, true);
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
-    if (gistId in this.eTags_) {
-      xhr.setRequestHeader("If-None-Match", this.eTags_[gistId]); //"Sat, 1 Jan 2005 00:00:00 GMT");
+    if (url in this.eTags_) {
+      xhr.setRequestHeader("If-None-Match", this.eTags_[url]); //"Sat, 1 Jan 2005 00:00:00 GMT");
     }
     xhr.setRequestHeader("If-Modified-Since", "Sat, 1 Jan 2005 00:00:00 GMT");
     xhr.on('onload', function() {
       xhr.getResponseHeader('ETag').then(function(ETag) {
-        this.eTags_[gistId] = ETag;
+        this.eTags_[url] = ETag;
       }.bind(this));
 
-      xhr.getStatus().then(function(status) {
-        //console.log(status);
-        if (status === 304) {
-          fulfill([]);
-          return;
-        }
-        if (status === 200) {
-          xhr.getResponseText().then(function(responseText) {
-            var comments = JSON.parse(responseText);
-            var new_comments = [];
-            var last_updated = 0;
-            for (var i in comments) {
-              var updated_at = Date.parse(comments[i].updated_at);
-              if (updated_at > this.lastUpdatedTimestamp_[gistId]) {
-                var comment = {
-                  from: comments[i].user.login,
-                  body: comments[i].body,
-                  url: comments[i].url
-                };
+      xhr.getResponseHeader('Link').then(function(link) {
+        xhr.getStatus().then(function(status) {
+          if (status === 304) {
+            fulfill([]);
+            return;
+          }
+          if (status === 200) {
+            xhr.getResponseText().then(function(responseText) {
+              var comments = JSON.parse(responseText);
+              var new_comments = [];
+              var last_updated = 0;
+              for (var i in comments) {
+                var updated_at = Date.parse(comments[i].updated_at);
+                if (updated_at > this.lastUpdatedTimestamp_[gistId]) {
+                  var comment = {
+                    from: comments[i].user.login,
+                    body: comments[i].body,
+                    url: comments[i].url
+                  };
 
-                if (this.isValidMessage_(comment, from)) {
-                  new_comments.push(comment);
+                  if (this.isValidMessage_(comment, from)) {
+                    new_comments.push(comment);
+                  }
+                }
+
+                if (updated_at > last_updated) {
+                  last_updated = updated_at;
                 }
               }
-
-              if (updated_at > last_updated) {
-                last_updated = updated_at;
+              if (last_updated > this.lastUpdatedTimestamp_[gistId]) {
+                this.lastUpdatedTimestamp_[gistId] = last_updated;
               }
-            }
-            if (last_updated > this.lastUpdatedTimestamp_[gistId]) {
-              this.lastUpdatedTimestamp_[gistId] = last_updated;
-            }
-            if (comments.length === 30) {
-              this.pullGist_(gistId, from, page+1).then(function(other_comments) {
-                fulfill(new_comments.concat(other_comments));
-              });
-            } else {
-              fulfill(new_comments);
-            }
-            this.saveToLocalStorage_();
-          }.bind(this));
-        } else {
-          reject();
-        }
+              if (comments.length === 30) {
+                this.pullGist_(gistId, from, page+1).then(function(other_comments) {
+                  fulfill(new_comments.concat(other_comments));
+                });
+              } else {
+                fulfill(new_comments);
+              }
+              this.saveToLocalStorage_();
+            }.bind(this));
+          } else {
+            reject();
+          }
+        }.bind(this));
       }.bind(this));
     }.bind(this));
     xhr.send();
@@ -379,6 +390,10 @@ GithubSocialProvider.prototype.restoreFromStorage_ = function() {
           case 1:
             try {
               var body = JSON.parse(comments[0].body);
+              for (userId in body.message) {
+                this.users_[userId] = body.message[userId];
+                this.updateUserStatus_(userId, body.message[userId].status);
+              }
               this.users_ = body.message;
               this.myStorageGist_ = comments[0].url;
             } catch (e) {
@@ -400,10 +415,10 @@ GithubSocialProvider.prototype.modifyGistContent_ = function(gistId, content) {
   xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
   xhr.on('onload', function() {
     xhr.getResponseText().then(function(responseText) {
-      console.log(responseText);
+      //console.log(responseText);
     });
     xhr.getStatus().then(function(status) {
-      console.log(status);
+      //console.log(status);
     });
   });
   xhr.send({string: JSON.stringify({
@@ -446,6 +461,14 @@ GithubSocialProvider.prototype.finishLogin_ = function() {
   }.bind(this));
   this.createGist_(HEARTBEAT_GIST_DESCRIPTION, false, "heartbeat").then(function(gistId) {
     this.heartbeatGist_ = gistId;
+    this.createGist_('signaling:' + this.myClientState_.userId, false, "signaling")
+        .then(function(signalingGist) {
+      this.getUserProfile_(this.myClientState_.userId).then(function(profile) {
+          this.updateUserStatus_(this.myClientState_.userId, STATUS.FRIEND);
+          profile.heartbeat = this.heartbeatGist_;
+          profile.signaling = signalingGist;
+      }.bind(this));
+    }.bind(this));
     this.pullGist_(gistId, this.myClientState_.userId).then(function(heartbeats) {
       for (var i in heartbeats) {
         var comment = JSON.parse(heartbeats[i].body);
@@ -463,23 +486,28 @@ GithubSocialProvider.prototype.finishLogin_ = function() {
             this.myHeartbeatGist_ = gistUrl;
         }.bind(this));
       }
-    }.bind(this)).catch(function(E) {
+      this.restoreFromStorage_().then(this.readFromLocalStorage_.bind(this)).then(function() {
+        this.heartbeat_(); /// XXX this is a hack
+        this.heartbeatIntervalId_ = setInterval(this.heartbeat_.bind(this), 10000); // 10 secs for now
+        this.messagePullingIntervalId_ = setInterval(this.pullMessages_.bind(this), 1000); // 1 sec
+      }.bind(this));
+    }.bind(this)).catch(function(e) {
       console.error(e);
     });
   }.bind(this));
-  this.readFromLocalStorage_().then(function() {
-    this.heartbeat_(); /// XXX this is a hack
-    this.heartbeatIntervalId_ = setInterval(this.heartbeat_.bind(this), 10000); // 10 secs for now
-    this.messagePullingIntervalId_ = setInterval(this.pullMessages_.bind(this), 1000); // 1 sec
-  }.bind(this));
+
 };
 
 GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
   var promises = [];
+  var userId = this.myClientState_.userId;
   promises.push(new Promise(function(fulfill, reject) {
-    this.storage_.get(ETAGS_STORAGE_KEY).then(function(result) {
+    this.storage_.get(userId + ETAGS_STORAGE_KEY).then(function(result) {
       try {
-        this.eTags_ = JSON.parse(result);
+        //TODO uncomment this but we need to store
+        //last page if we do this.
+        //Is it worth it?
+        //this.eTags_ = JSON.parse(result);
       } catch (e) {
         this.eTags_ = {};
       }
@@ -492,7 +520,7 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
   }.bind(this)));
 
   promises.push(new Promise(function(fulfill, reject) {
-    this.storage_.get(TIMESTAMPS_STORAGE_KEY).then(function(result) {
+    this.storage_.get(userId + TIMESTAMPS_STORAGE_KEY).then(function(result) {
       try {
         this.lastUpdatedTimestamp_ = JSON.parse(result);
       } catch (e) {
@@ -505,7 +533,7 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
       fulfill();
     }.bind(this));
   }.bind(this)));
-
+  /*
   promises.push(new Promise(function(fulfill, reject) {
     this.storage_.get('users').then(function(result) {
       try {
@@ -520,6 +548,7 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
       fulfill();
     }.bind(this));
   }.bind(this)));
+  */
 
 
   return Promise.all(promises);
@@ -528,8 +557,9 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
 
 GithubSocialProvider.prototype.saveToLocalStorage_ = function() {
   // Do we need to return promise?
-  this.storage_.set(ETAGS_STORAGE_KEY, JSON.stringify(this.eTags_));
-  this.storage_.set(TIMESTAMPS_STORAGE_KEY, JSON.stringify(this.lastUpdatedTimestamp_));
+  var userId = this.clientState_.userId;
+  this.storage_.set(userId + ETAGS_STORAGE_KEY, JSON.stringify(this.eTags_));
+  this.storage_.set(userId + TIMESTAMPS_STORAGE_KEY, JSON.stringify(this.lastUpdatedTimestamp_));
 };
 
 GithubSocialProvider.prototype.parseHeartbeat_ = function(userId, heartbeats) {
@@ -591,7 +621,7 @@ GithubSocialProvider.prototype.isValidMessage_ = function(comment, from) {
   }
   if (message.clientId !== this.myClientState_.clientId &&
       message.messageType == MESSAGE_TYPES.STORAGE) {
-    return false;
+    //return false;
   }
 
   // Discard old heartbeats.
@@ -627,53 +657,57 @@ GithubSocialProvider.prototype.parseMessages_ = function(messages, from) {
       lastSeen: Date.now()
     };
 
+    this.addOrUpdateClient_(messages[i].from, comment.clientId, 'ONLINE');
+
     this.handleMessage_(clientState, comment.message);
   }
 };
 
 
 GithubSocialProvider.prototype.modifyComment_ = function(commentUrl, body) {
-  if (typeof commentUrl === 'undefined' ||
-      commentUrl === '') {
-    return;
-  }
-  var xhr = freedom["core.xhr"]();
-  xhr.open('PATCH', commentUrl, true);
-  xhr.setRequestHeader('Content-Type', 'application/json');
-  xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
-  xhr.on('onload', function() {
-    xhr.getResponseText().then(function(responseText) {
-      //console.log(responseText);
+  return new Promise(function(fulfill, reject) {
+    if (typeof commentUrl === 'undefined' ||
+        commentUrl === '') {
+      return;
+    }
+    var xhr = freedom["core.xhr"]();
+    xhr.open('PATCH', commentUrl, true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
+    xhr.on('onload', function() {
+      xhr.getStatus().then(function(status) {
+        if (status === 200) {
+          fulfill()
+        } else {
+          reject();
+        }
+        //console.log(status);
+      });
     });
-    xhr.getStatus().then(function(status) {
-      //console.log(status);
-    });
-  });
-  xhr.send({string: JSON.stringify({
-    "body": JSON.stringify(body)
-  })});
+    xhr.send({string: JSON.stringify({
+      "body": JSON.stringify(body)
+    })});
+  }.bind(this));
 };
 
 GithubSocialProvider.prototype.saveToStorage_ = function() {
-  this.storage_.set('users', JSON.stringify(this.users_));
-  /*
+  //this.storage_.set('users', JSON.stringify(this.users_));
   this.modifyComment_(this.myStorageGist_,
                       {clientId: this.myClientState_.clientId,
                        messageType: MESSAGE_TYPES.STORAGE,
                        message: this.users_});
-  */
 };
 
 GithubSocialProvider.prototype.handleInvite_ = function(from, comment) {
-  return this.getUserProfile_(from).then(function(profile) {
-    return this.checkForGist_(from, PUBLIC_GIST_DESCRIPTION).then(function(friendGist) {
-      return this.getContent_(friendGist);
-    }.bind(this)).then(function(keys) {
-      var key = keys[comment.clientId];
-      return this.pgp_.dearmor(comment.message).then(function(cipherData) {
-        return this.pgp_.verifyDecrypt(cipherData, key);
-      }.bind(this)).then(function(result) {
-        var message = JSON.parse(arrayBufferToString(result.data));
+  return this.checkForGist_(from, PUBLIC_GIST_DESCRIPTION).then(function(friendGist) {
+    return this.getContent_(friendGist);
+  }.bind(this)).then(function(keys) {
+    var key = keys[comment.clientId];
+    return this.pgp_.dearmor(comment.message).then(function(cipherData) {
+      return this.pgp_.verifyDecrypt(cipherData, key);
+    }.bind(this)).then(function(result) {
+      var message = JSON.parse(arrayBufferToString(result.data));
+      return this.getUserProfile_(from).then(function(profile) {
         profile.heartbeat = message.heartbeat;
         profile.signaling = message.signaling;
         this.updateUserStatus_(from, STATUS.INVITED_BY_USER);
@@ -703,7 +737,7 @@ GithubSocialProvider.prototype.pullMessages_ = function() {
   }
 
   for (var user in this.users_) {
-    if (typeof this.users_[user].signaling != 'undefined') {
+    if (typeof this.users_[user].signaling !== 'undefined') {
       this.pullGist_(this.users_[user].signaling, user).then(this.parseMessages_.bind(this));
     }
   }
@@ -723,20 +757,28 @@ GithubSocialProvider.prototype.deleteComment_ = function(commentUrl) {
 };
 
 GithubSocialProvider.prototype.heartbeat_ = function() {
+  setTimeout(function() {
+    if (Date.now() - this.lastHeartbeatTimestamp_ > 60000) {
+      this.addOrUpdateClient_(
+          this.myClientState_.userId,
+          this.myClientState_.clientId,
+          'OFFLINE');
+    }
+  }.bind(this), 60000);
   this.modifyComment_(this.myHeartbeatGist_,
                       {clientId: this.myClientState_.clientId,
                        messageType: MESSAGE_TYPES.HEARTBEAT,
                        message: {
                         date: Date.now()
-                      }});
+                      }})
+      .then(function(e) {
+        this.lastHeartbeatTimestamp_ = Date.now();
+      }.bind(this));
   for (var user in this.users_) {
     if (typeof this.users_[user].heartbeat !== 'undefined' &&
         this.users_[user].status === STATUS.FRIEND) {
       var heart = this.users_[user].heartbeat;
       this.pullGist_(heart, user).then(this.parseHeartbeat_.bind(this, user));
-    }
-    if (typeof this.users_[user].signaling != 'undefined') {
-      this.pullGist_(this.users_[user].signaling, user).then(this.parseMessages_.bind(this));
     }
   }
 };
@@ -830,15 +872,16 @@ GithubSocialProvider.prototype.getUsers = function() {
  * Sends a message to another clientId.
  */
 GithubSocialProvider.prototype.sendMessage = function(toClientId, message) {
-  /*
   if (this.clientStates_[toClientId].status !== 'ONLINE') {
     return Promise.reject('Client not online');
   }
-  */
 
   var userId = this.clientStates_[toClientId].userId;
   var signalingGist = this.users_[userId].signaling;
-  return this.postComment_(signalingGist, MESSAGE_TYPES.MESSAGE, message, toClientId);
+  return this.postComment_(signalingGist, MESSAGE_TYPES.MESSAGE, message, toClientId)
+      .then(function() {
+    return Promise.resolve()
+  });
 };
 
 /*
