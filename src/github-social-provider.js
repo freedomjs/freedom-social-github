@@ -4,7 +4,7 @@
 var PUBLIC_GIST_DESCRIPTION = 'freedom_public';
 var HEARTBEAT_GIST_DESCRIPTION = 'freedom_hearbeat';
 var ETAGS_STORAGE_KEY = '_etags';
-var CLIENT_ID =  '_client_id'
+var CLIENT_ID =  '_client_id';
 var TIMESTAMPS_STORAGE_KEY = '_timestamps';
 
 var MESSAGE_TYPES = {
@@ -390,7 +390,7 @@ GithubSocialProvider.prototype.restoreFromStorage_ = function() {
           case 1:
             try {
               var body = JSON.parse(comments[0].body);
-              for (userId in body.message) {
+              for (var userId in body.message) {
                 this.users_[userId] = body.message[userId];
                 this.updateUserStatus_(userId, body.message[userId].status);
               }
@@ -677,7 +677,7 @@ GithubSocialProvider.prototype.modifyComment_ = function(commentUrl, body) {
     xhr.on('onload', function() {
       xhr.getStatus().then(function(status) {
         if (status === 200) {
-          fulfill()
+          fulfill();
         } else {
           reject();
         }
@@ -880,7 +880,7 @@ GithubSocialProvider.prototype.sendMessage = function(toClientId, message) {
   var signalingGist = this.users_[userId].signaling;
   return this.postComment_(signalingGist, MESSAGE_TYPES.MESSAGE, message, toClientId)
       .then(function() {
-    return Promise.resolve()
+    return Promise.resolve();
   });
 };
 
