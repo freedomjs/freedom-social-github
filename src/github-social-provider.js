@@ -322,8 +322,8 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page, newPage)
               var last_updated = 0;
               for (var i in comments) {
                 var updated_at = Date.parse(comments[i].updated_at);
-                if (updated_at > this.lastUpdatedTimestamp_[gistId]
-                    || (newPage && updated_at === this.lastUpdatedTimestamp_[gistId])) {
+                if (updated_at > this.lastUpdatedTimestamp_[gistId] ||
+                    (newPage && updated_at === this.lastUpdatedTimestamp_[gistId])) {
                   var comment = {
                     from: comments[i].user.login,
                     body: comments[i].body,
