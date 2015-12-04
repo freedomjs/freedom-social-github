@@ -42,6 +42,7 @@ var GithubSocialProvider = function(dispatchEvent) {
   this.storage_ = freedom['core.storage']();
   this.lastPage_ = {};
   this.lastHeartbeatTimestamp_ = 0;
+  this.storageDone_ = false;
 };
 
 function arrayBufferToString(buffer) {
@@ -271,7 +272,7 @@ GithubSocialProvider.prototype.postComment_ = function(gistId, messageType, comm
  * Get given gist.
  * @param gist    url with form https://api.github.com/gists/:id
  */
-GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
+GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page, newPage) {
   return new Promise(function(fulfill, reject) {
     if (typeof page === 'undefined') {
       if (gistId in this.lastPage_) {
@@ -280,6 +281,10 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
         this.lastPage_[gistId] = 1;
         page = 1;
       }
+    }
+
+    if (typeof newPage === 'undefined') {
+      newPage = false;
     }
 
     if (page > this.lastPage_[gistId]) {
@@ -317,7 +322,8 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
               var last_updated = 0;
               for (var i in comments) {
                 var updated_at = Date.parse(comments[i].updated_at);
-                if (updated_at > this.lastUpdatedTimestamp_[gistId]) {
+                if (updated_at > this.lastUpdatedTimestamp_[gistId]
+                    || (newPage && updated_at === this.lastUpdatedTimestamp_[gistId])) {
                   var comment = {
                     from: comments[i].user.login,
                     body: comments[i].body,
@@ -337,7 +343,7 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page) {
                 this.lastUpdatedTimestamp_[gistId] = last_updated;
               }
               if (comments.length === 30) {
-                this.pullGist_(gistId, from, page+1).then(function(other_comments) {
+                this.pullGist_(gistId, from, page+1, true).then(function(other_comments) {
                   fulfill(new_comments.concat(other_comments));
                 });
               } else {
@@ -530,6 +536,7 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
       if (result === null) {
         this.lastUpdatedTimestamp_ = {};
       }
+      this.storageDone_ = true;
       fulfill();
     }.bind(this));
   }.bind(this)));
@@ -557,7 +564,10 @@ GithubSocialProvider.prototype.readFromLocalStorage_ = function() {
 
 GithubSocialProvider.prototype.saveToLocalStorage_ = function() {
   // Do we need to return promise?
-  var userId = this.clientState_.userId;
+  if (!this.storageDone_) {
+    return;
+  }
+  var userId = this.myClientState_.userId;
   this.storage_.set(userId + ETAGS_STORAGE_KEY, JSON.stringify(this.eTags_));
   this.storage_.set(userId + TIMESTAMPS_STORAGE_KEY, JSON.stringify(this.lastUpdatedTimestamp_));
 };
