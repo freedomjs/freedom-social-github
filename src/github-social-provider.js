@@ -114,31 +114,30 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
           xhr.on('onload', function() {
             xhr.getResponseText().then(function(text) {
               var user = JSON.parse(text);
-              this.prepareClientId_(user.login).then(function(clientId) {
-                var clientState = {
-                  userId: user.login,
-                  clientId: clientId,
-                  status: "ONLINE",
-                  lastUpdated: Date.now(),
-                  lastSeen: Date.now()
-                };
+              var clientId = Math.random().toString();
+              var clientState = {
+                userId: user.login,
+                clientId: clientId,
+                status: "ONLINE",
+                lastUpdated: Date.now(),
+                lastSeen: Date.now()
+              };
 
-                this.myClientState_ = clientState;
-                // If the user does not yet have a public uProxy gist, create one.
+              this.myClientState_ = clientState;
+              // If the user does not yet have a public uProxy gist, create one.
 
-                fulfillLogin(clientState);
-                //this.loadContacts_();
+              fulfillLogin(clientState);
+              //this.loadContacts_();
 
-                var profile = {
-                  userId: user.login,
-                  name: user.name,
-                  lastUpdated: Date.now(),
-                  url: user.html_url,
-                  imageData: user.avatar_url
-                };
-                this.addUserProfile_(profile);
-                this.finishLogin_();
-              }.bind(this));
+              var profile = {
+                userId: user.login,
+                name: user.name,
+                lastUpdated: Date.now(),
+                url: user.html_url,
+                imageData: user.avatar_url
+              };
+              this.addUserProfile_(profile);
+              this.finishLogin_();
             }.bind(this));
           }.bind(this));
           xhr.send();
@@ -149,20 +148,6 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
   }.bind(this));  // end of return new Promise
 };
 
-GithubSocialProvider.prototype.prepareClientId_ = function(userId) {
-  return new Promise(function(fulfill, reject) {
-    this.storage_.get(userId + CLIENT_ID).then(function(clientId) {
-      if (typeof clientId !== 'undefined' && clientId !== null) {
-        fulfill(clientId);
-      } else {
-        clientId = Math.random().toString();
-        this.storage_.set(userId + CLIENT_ID, clientId);
-        fulfill(clientId);
-      }
-    }.bind(this));
-  }.bind(this));
-};
-
 /*
  * Check if this user already has a public uProxy gist with their public
  * key in it.
@@ -170,9 +155,8 @@ GithubSocialProvider.prototype.prepareClientId_ = function(userId) {
 GithubSocialProvider.prototype.checkForGist_ = function(userId, description) {
   var xhr = new XMLHttpRequest();
   var url = 'https://api.github.com/users/' + userId + '/gists';
-  xhr.open('GET', url);
+  xhr.open('GET', url + '?' + Date.now());
   xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
-  xhr.setRequestHeader("If-Modified-Since", "Sat, 2 Jan 2005 00:00:00 GMT");
   return new Promise(function(fulfill, reject) {
     // TODO: error checking
     xhr.onload = function() {
@@ -297,13 +281,12 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page, newPage)
 
     var xhr = freedom["core.xhr"]();
     var url = 'https://api.github.com/gists/' + gistId + '/comments?page=' + page;
-    xhr.open('GET', url, true);
+    xhr.open('GET', url + '&' + Date.now(), true);
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
     if (url in this.eTags_) {
       xhr.setRequestHeader("If-None-Match", this.eTags_[url]); //"Sat, 1 Jan 2005 00:00:00 GMT");
     }
-    xhr.setRequestHeader("If-Modified-Since", "Sat, 1 Jan 2005 00:00:00 GMT");
     xhr.on('onload', function() {
       xhr.getResponseHeader('ETag').then(function(ETag) {
         this.eTags_[url] = ETag;
