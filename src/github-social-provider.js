@@ -310,7 +310,8 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page, newPage)
                   var comment = {
                     from: comments[i].user.login,
                     body: comments[i].body,
-                    url: comments[i].url
+                    url: comments[i].url,
+                    timestamp: updated_at
                   };
 
                   if (this.isValidMessage_(comment, from)) {
@@ -622,7 +623,7 @@ GithubSocialProvider.prototype.isValidMessage_ = function(comment, from) {
   // your friends heartbeats between last time you check it
   // and now but it shouldn't count because it's old.
   if (message.messageType == MESSAGE_TYPES.HEARTBEAT) {
-    if (message.message.date < Date.now() - 20000) {
+    if (comment.timestamp < this.githubHeartbeatTimestamp_ - 20000) {
       return false;
     }
   }
@@ -670,7 +671,10 @@ GithubSocialProvider.prototype.modifyComment_ = function(commentUrl, body) {
     xhr.on('onload', function() {
       xhr.getStatus().then(function(status) {
         if (status === 200) {
-          fulfill();
+          xhr.getResponseText().then(function(response) {
+            var c = JSON.parse(response);
+            fulfill(Date.parse(c.updated_at));
+          });
         } else {
           reject();
         }
@@ -756,6 +760,7 @@ GithubSocialProvider.prototype.heartbeat_ = function() {
           this.myClientState_.userId,
           this.myClientState_.clientId,
           'OFFLINE');
+      this.logout();
     }
   }.bind(this), 60000);
   this.modifyComment_(this.myHeartbeatGist_,
@@ -764,16 +769,17 @@ GithubSocialProvider.prototype.heartbeat_ = function() {
                        message: {
                         date: Date.now()
                       }})
-      .then(function(e) {
+      .then(function(timestamp) {
         this.lastHeartbeatTimestamp_ = Date.now();
+        this.githubHeartbeatTimestamp_ = timestamp;
+        for (var user in this.users_) {
+          if (typeof this.users_[user].heartbeat !== 'undefined' &&
+              this.users_[user].status === STATUS.FRIEND) {
+            var heart = this.users_[user].heartbeat;
+            this.pullGist_(heart, user).then(this.parseHeartbeat_.bind(this, user));
+          }
+        }
       }.bind(this));
-  for (var user in this.users_) {
-    if (typeof this.users_[user].heartbeat !== 'undefined' &&
-        this.users_[user].status === STATUS.FRIEND) {
-      var heart = this.users_[user].heartbeat;
-      this.pullGist_(heart, user).then(this.parseHeartbeat_.bind(this, user));
-    }
-  }
 };
 GithubSocialProvider.prototype.getContent_ = function(gistId) {
   return new Promise(function(fulfill, reject) {
