@@ -102,47 +102,45 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
         return responseUrl.match(/code=([^&]+)/)[1];
       });
     }).then(function(code) {
-      var xhr = freedom["core.xhr"]();
+      var xhr = new XMLHttpRequest();
       xhr.open('POST', 'https://github.com/login/oauth/access_token?code=' + code +
                 '&client_id=98d31e7ceefe0518a093' +
                 '&client_secret=f77bf1477d4ade44d2dff674e2ff742ed540b3a1', true);
-      xhr.on('onload', function() {
-        xhr.getResponseText().then(function(text) {
-          this.access_token = text.match(/access_token=([^&]+)/)[1];
-          xhr = new freedom["core.xhr"]();
-          xhr.open('GET', 'https://api.github.com/user?access_token=' + this.access_token, true);
-          xhr.on('onload', function() {
-            xhr.getResponseText().then(function(text) {
-              var user = JSON.parse(text);
-              var clientId = Math.random().toString();
-              var clientState = {
-                userId: user.login,
-                clientId: clientId,
-                status: "ONLINE",
-                lastUpdated: Date.now(),
-                lastSeen: Date.now()
-              };
+      xhr.onload = function() {
+        var text = xhr.responseText;
+        this.access_token = text.match(/access_token=([^&]+)/)[1];
+        xhr = new XMLHttpRequest();
+        xhr.open('GET', 'https://api.github.com/user?access_token=' + this.access_token, true);
+        xhr.onload = function() {
+          var text = xhr.responseText;
+          var user = JSON.parse(text);
+          var clientId = Math.random().toString();
+          var clientState = {
+            userId: user.login,
+            clientId: clientId,
+            status: "ONLINE",
+            lastUpdated: Date.now(),
+            lastSeen: Date.now()
+          };
 
-              this.myClientState_ = clientState;
-              // If the user does not yet have a public uProxy gist, create one.
+          this.myClientState_ = clientState;
+          // If the user does not yet have a public uProxy gist, create one.
 
-              fulfillLogin(clientState);
-              //this.loadContacts_();
+          fulfillLogin(clientState);
+          //this.loadContacts_();
 
-              var profile = {
-                userId: user.login,
-                name: user.name,
-                lastUpdated: Date.now(),
-                url: user.html_url,
-                imageData: user.avatar_url
-              };
-              this.addUserProfile_(profile);
-              this.finishLogin_();
-            }.bind(this));
-          }.bind(this));
-          xhr.send();
-        }.bind(this));
-      }.bind(this));
+          var profile = {
+            userId: user.login,
+            name: user.name,
+            lastUpdated: Date.now(),
+            url: user.html_url,
+            imageData: user.avatar_url
+          };
+          this.addUserProfile_(profile);
+          this.finishLogin_();
+        }.bind(this);  // end of inner onload
+        xhr.send();
+      }.bind(this);  // end of outer onload
       xhr.send();
     }.bind(this));
   }.bind(this));  // end of return new Promise
@@ -223,32 +221,29 @@ GithubSocialProvider.prototype.loadContacts_ = function() {
 
 GithubSocialProvider.prototype.postComment_ = function(gistId, messageType, comment, toClient) {
   return new Promise(function(fulfill, reject) {
-    var xhr = freedom["core.xhr"]();
+    var xhr = new XMLHttpRequest();
     var url = 'https://api.github.com/gists/' + gistId + '/comments';
     xhr.open('POST', url, true);
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
-    xhr.on('onload', function() {
-      xhr.getStatus().then(function(status) {
-        if (status === 201) {
-          xhr.getResponseText().then(function(text) {
-            var comment = JSON.parse(text);
-            fulfill(comment.url);
-          });
-        } else {
-          reject();
-        }
-      }.bind(this));
-    }.bind(this));
+    xhr.onload = function() {
+      var status = xhr.status;
+      if (status === 201) {
+        var comment = JSON.parse(xhr.responseText);
+        fulfill(comment.url);
+      } else {
+        reject();
+      }
+    }.bind(this);
     var message = {
       clientId: this.myClientState_.clientId,
       messageType: messageType,
       toClient: toClient,
       message: comment
     };
-    xhr.send({string: JSON.stringify({
+    xhr.send(JSON.stringify({
       "body" : JSON.stringify(message)
-    })});
+    }));
   }.bind(this));
 };
 
@@ -279,7 +274,7 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page, newPage)
       this.lastUpdatedTimestamp_[gistId] = 0;
     }
 
-    var xhr = freedom["core.xhr"]();
+    var xhr = new XMLHttpRequest();
     var url = 'https://api.github.com/gists/' + gistId + '/comments?page=' + page;
     xhr.open('GET', url + '&' + Date.now(), true);
     xhr.setRequestHeader('Content-Type', 'application/json');
@@ -287,81 +282,76 @@ GithubSocialProvider.prototype.pullGist_ = function(gistId, from, page, newPage)
     if (url in this.eTags_) {
       xhr.setRequestHeader("If-None-Match", this.eTags_[url]); //"Sat, 1 Jan 2005 00:00:00 GMT");
     }
-    xhr.on('onload', function() {
-      xhr.getResponseHeader('ETag').then(function(ETag) {
-        this.eTags_[url] = ETag;
-      }.bind(this));
+    xhr.onload = function() {
+      this.eTags_[url] = xhr.getResponseHeader('ETag');
+      var link = xhr.getResponseHeader('Link');
+      var status = xhr.status;
+      if (status === 304) {
+        fulfill([]);
+        return;
+      }
+      if (status === 200) {
+        var responseText = xhr.responseText;
+        var comments = JSON.parse(responseText);
+        var new_comments = [];
+        var last_updated = 0;
+        for (var i in comments) {
+          var updated_at = Date.parse(comments[i].updated_at);
+          if (updated_at > this.lastUpdatedTimestamp_[gistId] ||
+              (newPage && updated_at === this.lastUpdatedTimestamp_[gistId])) {
+            var comment = {
+              from: comments[i].user.login,
+              body: comments[i].body,
+              url: comments[i].url,
+              timestamp: updated_at
+            };
 
-      xhr.getResponseHeader('Link').then(function(link) {
-        xhr.getStatus().then(function(status) {
-          if (status === 304) {
-            fulfill([]);
-            return;
+            if (this.isValidMessage_(comment, from)) {
+              new_comments.push(comment);
+            }
           }
-          if (status === 200) {
-            xhr.getResponseText().then(function(responseText) {
-              var comments = JSON.parse(responseText);
-              var new_comments = [];
-              var last_updated = 0;
-              for (var i in comments) {
-                var updated_at = Date.parse(comments[i].updated_at);
-                if (updated_at > this.lastUpdatedTimestamp_[gistId] ||
-                    (newPage && updated_at === this.lastUpdatedTimestamp_[gistId])) {
-                  var comment = {
-                    from: comments[i].user.login,
-                    body: comments[i].body,
-                    url: comments[i].url
-                  };
 
-                  if (this.isValidMessage_(comment, from)) {
-                    new_comments.push(comment);
-                  }
-                }
-
-                if (updated_at > last_updated) {
-                  last_updated = updated_at;
-                }
-              }
-              if (last_updated > this.lastUpdatedTimestamp_[gistId]) {
-                this.lastUpdatedTimestamp_[gistId] = last_updated;
-              }
-              if (comments.length === 30) {
-                this.pullGist_(gistId, from, page+1, true).then(function(other_comments) {
-                  fulfill(new_comments.concat(other_comments));
-                });
-              } else {
-                fulfill(new_comments);
-              }
-              this.saveToLocalStorage_();
-            }.bind(this));
-          } else {
-            reject();
+          if (updated_at > last_updated) {
+            last_updated = updated_at;
           }
-        }.bind(this));
-      }.bind(this));
-    }.bind(this));
+        }
+        if (last_updated > this.lastUpdatedTimestamp_[gistId]) {
+          this.lastUpdatedTimestamp_[gistId] = last_updated;
+        }
+        if (comments.length === 30) {
+          this.pullGist_(gistId, from, page+1, true).then(function(other_comments) {
+            fulfill(new_comments.concat(other_comments));
+          });
+        } else {
+          fulfill(new_comments);
+        }
+        this.saveToLocalStorage_();
+      } else {
+        reject();
+      }
+
+    }.bind(this);  // end of onload
+
     xhr.send();
   }.bind(this));
 };
 
 GithubSocialProvider.prototype.getUserProfile_ = function(userId) {
   return new Promise(function(fulfill, reject) {
-    var xhr = freedom["core.xhr"]();
+    var xhr = new XMLHttpRequest();
     xhr.open('GET', 'https://api.github.com/users/' + userId + '?access_token=' + this.access_token, true);
-    xhr.on('onload', function() {
-      xhr.getResponseText().then(function(text) {
-        var user = JSON.parse(text);
-        //console.log(user);
-        var profile = {
-          userId: user.login,
-          name: user.nameGist,
-          lastUpdated: Date.now(),
-          url: user.html_url,
-          imageData: user.avatar_url,
-        };
-        fulfill(this.addUserProfile_(profile));
-      }.bind(this));
-    }.bind(this));
+    xhr.onload = function() {
+      var user = JSON.parse(xhr.responseText);
+      //console.log(user);
+      var profile = {
+        userId: user.login,
+        name: user.nameGist,
+        lastUpdated: Date.now(),
+        url: user.html_url,
+        imageData: user.avatar_url,
+      };
+      fulfill(this.addUserProfile_(profile));
+    }.bind(this);
     xhr.send();
   }.bind(this));
 };
@@ -398,19 +388,11 @@ GithubSocialProvider.prototype.restoreFromStorage_ = function() {
 };
 
 GithubSocialProvider.prototype.modifyGistContent_ = function(gistId, content) {
-  var xhr = freedom["core.xhr"]();
+  var xhr = new XMLHttpRequest();
   xhr.open('PATCH', 'https://api.github.com/gists/' + gistId, true);
   xhr.setRequestHeader('Content-Type', 'application/json');
   xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
-  xhr.on('onload', function() {
-    xhr.getResponseText().then(function(responseText) {
-      //console.log(responseText);
-    });
-    xhr.getStatus().then(function(status) {
-      //console.log(status);
-    });
-  });
-  xhr.send({string: JSON.stringify({
+  xhr.send(JSON.stringify({
     "description": PUBLIC_GIST_DESCRIPTION, // TODO change it
     "files": {
       'file': {
@@ -418,7 +400,7 @@ GithubSocialProvider.prototype.modifyGistContent_ = function(gistId, content) {
         "content": content
       }
     }
-  })});
+  }));
 
 };
 GithubSocialProvider.prototype.finishLogin_ = function() {
@@ -663,23 +645,21 @@ GithubSocialProvider.prototype.modifyComment_ = function(commentUrl, body) {
         commentUrl === '') {
       return;
     }
-    var xhr = freedom["core.xhr"]();
+    var xhr = new XMLHttpRequest();
     xhr.open('PATCH', commentUrl, true);
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
-    xhr.on('onload', function() {
-      xhr.getStatus().then(function(status) {
-        if (status === 200) {
-          fulfill();
-        } else {
-          reject();
-        }
-        //console.log(status);
-      });
-    });
-    xhr.send({string: JSON.stringify({
+    xhr.onload = function() {
+      if (xhr.status === 200) {
+        fulfill();
+      } else {
+        reject();
+      }
+      //console.log(status);
+    };
+    xhr.send(JSON.stringify({
       "body": JSON.stringify(body)
-    })});
+    }));
   }.bind(this));
 };
 
@@ -737,15 +717,10 @@ GithubSocialProvider.prototype.pullMessages_ = function() {
 };
 
 GithubSocialProvider.prototype.deleteComment_ = function(commentUrl) {
-  var xhr = freedom["core.xhr"]();
+  var xhr = new XMLHttpRequest();
   xhr.open('DELETE', commentUrl, true);
   xhr.setRequestHeader('Content-Type', 'application/json');
   xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
-  xhr.on('onload', function() {
-    xhr.getStatus().then(function(status) {
-      //console.log(status);
-    });
-  });
   xhr.send();
 };
 
@@ -777,17 +752,15 @@ GithubSocialProvider.prototype.heartbeat_ = function() {
 };
 GithubSocialProvider.prototype.getContent_ = function(gistId) {
   return new Promise(function(fulfill, reject) {
-    var xhr = freedom["core.xhr"]();
+    var xhr = new XMLHttpRequest();
     xhr.open('GET', 'https://api.github.com/gists/' + gistId, true);
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.setRequestHeader('Authorization', 'token ' + this.access_token);
-    xhr.on('onload', function() {
-      xhr.getResponseText().then(function(text) {
-        var gist = JSON.parse(text);
-        fulfill(JSON.parse(gist.files.file.content));
-        //console.log(status);
-      });
-    });
+    xhr.onload = function() {
+      var gist = JSON.parse(xhr.responseText);
+      fulfill(JSON.parse(gist.files.file.content));
+      //console.log(status);
+    };
     xhr.send();
   }.bind(this));
 };
