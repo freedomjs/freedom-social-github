@@ -87,25 +87,30 @@ GithubSocialProvider.prototype.initLogger_ = function(moduleName) {
  */
 GithubSocialProvider.prototype.login = function(loginOpts) {
   return new Promise(function(fulfillLogin, rejectLogin) {
+    // Note that each Github app (identified by its client_id) only accepts a
+    // single redirect URL.  The acceptable URL for the current client_id must
+    // be the first entry in this list.
     var OAUTH_REDIRECT_URLS = [
+      "https://fmdppkkepalnkeommjadgbhiohihdhii.chromiumapp.org/",
       "https://www.uproxy.org/oauth-redirect-uri",
       "http://freedomjs.org/",
-      "http://localhost:8080/",
-      "https://fmdppkkepalnkeommjadgbhiohihdhii.chromiumapp.org/"
+      "http://localhost:8080/"
     ];
-    var OAUTH_CLIENT_ID = '98d31e7ceefe0518a093';
+    var OAUTH_CLIENT_ID = '6b4c318b61fa1bd2ec82';
+    var OAUTH_CLIENT_SECRET = '121fd189832494a00f7f79f39d3ef4883ba0fc36';
     var oauth = freedom["core.oauth"]();
 
     oauth.initiateOAuth(OAUTH_REDIRECT_URLS).then(function(stateObj) {
-      var url ='https://github.com/login/oauth/authorize?client_id=98d31e7ceefe0518a093&scope=gist';
+      var url ='https://github.com/login/oauth/authorize?client_id=' + OAUTH_CLIENT_ID +
+          '&scope=gist';
       return oauth.launchAuthFlow(url, stateObj).then(function(responseUrl) {
         return responseUrl.match(/code=([^&]+)/)[1];
       });
     }).then(function(code) {
       var xhr = new XMLHttpRequest();
       xhr.open('POST', 'https://github.com/login/oauth/access_token?code=' + code +
-                '&client_id=98d31e7ceefe0518a093' +
-                '&client_secret=f77bf1477d4ade44d2dff674e2ff742ed540b3a1', true);
+                '&client_id=' + OAUTH_CLIENT_ID +
+                '&client_secret=' + OAUTH_CLIENT_SECRET, true);
       xhr.onload = function() {
         var text = xhr.responseText;
         this.access_token = text.match(/access_token=([^&]+)/)[1];
