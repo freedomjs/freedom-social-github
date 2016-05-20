@@ -89,12 +89,10 @@ GithubSocialProvider.prototype.login = function(loginOpts) {
   return new Promise(function(fulfillLogin, rejectLogin) {
     // Note that each Github app (identified by its client_id) only accepts a
     // single redirect URL.  The acceptable URL for the current client_id must
-    // be the first entry in this list.
+    // be the only entry in this list, because otherwise the oauth provider is
+    // free to select any of them.
     var OAUTH_REDIRECT_URLS = [
-      "https://fmdppkkepalnkeommjadgbhiohihdhii.chromiumapp.org/",
-      "https://www.uproxy.org/oauth-redirect-uri",
-      "http://freedomjs.org/",
-      "http://localhost:8080/"
+      "https://fmdppkkepalnkeommjadgbhiohihdhii.chromiumapp.org/"
     ];
     var OAUTH_CLIENT_ID = '6b4c318b61fa1bd2ec82';
     var OAUTH_CLIENT_SECRET = '121fd189832494a00f7f79f39d3ef4883ba0fc36';
